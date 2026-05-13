@@ -26,7 +26,10 @@ from sklearn.svm import SVC, SVR
 from sklearn.tree import DecisionTreeClassifier
 
 
-BASE_DIR = Path(__file__).resolve().parent
+ROOT_DIR = Path(__file__).resolve().parents[1]
+RAW_DATA_DIR = ROOT_DIR / "data" / "raw"
+PROCESSED_DATA_DIR = ROOT_DIR / "data" / "processed"
+MODELS_DIR = ROOT_DIR / "models"
 
 FEATURES = [
     "overall_diff",
@@ -133,11 +136,11 @@ def clean_columns(df):
     return df
 
 
-def load_data(base_dir=BASE_DIR):
-    players = pd.read_csv(base_dir / "fifa18_clean.csv", encoding="utf-8-sig")
-    matches = pd.read_csv(base_dir / "international_matches.csv")
-    rankings = pd.read_csv(base_dir / "fifa_mens_rank.csv")
-    names = pd.read_csv(base_dir / "former_names.csv")
+def load_data(raw_data_dir=RAW_DATA_DIR):
+    players = pd.read_csv(raw_data_dir / "fifa18_clean.csv", encoding="utf-8-sig")
+    matches = pd.read_csv(raw_data_dir / "international_matches.csv")
+    rankings = pd.read_csv(raw_data_dir / "fifa_mens_rank.csv")
+    names = pd.read_csv(raw_data_dir / "former_names.csv")
     return clean_columns(players), clean_columns(matches), clean_columns(rankings), clean_columns(names)
 
 
@@ -422,15 +425,18 @@ def train_model():
     )
     regression_results = evaluate_regression_models(X, model_dataset["goal_diff"])
 
-    world_cup_matches = pd.read_csv(BASE_DIR / "world_cup_matches.csv")
+    PROCESSED_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+
+    world_cup_matches = pd.read_csv(RAW_DATA_DIR / "world_cup_matches.csv")
     tournament_success_dataset = build_tournament_success_dataset(world_cup_matches, names, team_features)
     tournament_success_results = evaluate_tournament_success_models(tournament_success_dataset)
 
     model = trained_models[best_model_name]
-    model_dataset.to_csv(BASE_DIR / "compiled_fifa_match_dataset.csv", index=False)
-    tournament_success_dataset.to_csv(BASE_DIR / "tournament_success_dataset.csv", index=False)
-    joblib.dump(model, BASE_DIR / "fifa_model.pkl")
-    joblib.dump(team_features, BASE_DIR / "team_features.pkl")
+    model_dataset.to_csv(PROCESSED_DATA_DIR / "compiled_fifa_match_dataset.csv", index=False)
+    tournament_success_dataset.to_csv(PROCESSED_DATA_DIR / "tournament_success_dataset.csv", index=False)
+    joblib.dump(model, MODELS_DIR / "fifa_model.pkl")
+    joblib.dump(team_features, MODELS_DIR / "team_features.pkl")
 
     metrics = {
         "best_match_model": best_model_name,
@@ -449,7 +455,7 @@ def train_model():
             "Jordan has ranking data but no FIFA18 player rows, so median player-strength features are used.",
         ],
     }
-    joblib.dump(metrics, BASE_DIR / "model_metrics.pkl")
+    joblib.dump(metrics, MODELS_DIR / "model_metrics.pkl")
     return metrics
 
 
