@@ -9,17 +9,27 @@ import streamlit as st
 BASE_DIR = Path(__file__).resolve().parent
 FEATURES = [
     "overall_diff",
+    "attack_diff",
+    "midfield_diff",
+    "defense_diff",
+    "goalkeeper_diff",
     "age_diff",
     "balance_diff",
     "player_pool_diff",
+    "elite_player_diff",
     "rank_advantage",
     "points_diff",
 ]
 PREDICTION_COLUMNS = [
     "avg_overall",
+    "attack_strength",
+    "midfield_strength",
+    "defense_strength",
+    "goalkeeper_strength",
     "avg_age",
     "team_balance",
     "num_players",
+    "elite_players",
     "rank",
     "total_points",
 ]
@@ -113,6 +123,17 @@ def qualified_prediction_teams(team_features):
     return [team for team in QUALIFIED_2026_TEAMS if team in ready]
 
 
+def metrics_table(results, columns):
+    rows = []
+    for model_name, values in results.items():
+        row = {"Model": model_name}
+        for column in columns:
+            value = values.get(column)
+            row[column.upper() if column != "roc_auc" else "ROC-AUC"] = value
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
 def predict_match(team_a_name, team_b_name, team_features, model):
     tf = team_features.copy()
     tf["team_clean"] = tf["team"].str.lower().str.strip()
@@ -123,9 +144,14 @@ def predict_match(team_a_name, team_b_name, team_features, model):
     input_data = pd.DataFrame(
         {
             "overall_diff": [team_a["avg_overall"] - team_b["avg_overall"]],
+            "attack_diff": [team_a["attack_strength"] - team_b["attack_strength"]],
+            "midfield_diff": [team_a["midfield_strength"] - team_b["midfield_strength"]],
+            "defense_diff": [team_a["defense_strength"] - team_b["defense_strength"]],
+            "goalkeeper_diff": [team_a["goalkeeper_strength"] - team_b["goalkeeper_strength"]],
             "age_diff": [team_a["avg_age"] - team_b["avg_age"]],
             "balance_diff": [team_a["team_balance"] - team_b["team_balance"]],
             "player_pool_diff": [team_a["num_players"] - team_b["num_players"]],
+            "elite_player_diff": [team_a["elite_players"] - team_b["elite_players"]],
             "rank_advantage": [team_b["rank"] - team_a["rank"]],
             "points_diff": [team_a["total_points"] - team_b["total_points"]],
         }
@@ -471,11 +497,17 @@ with report_tab:
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        st.metric("Model accuracy", f"{metrics.get('accuracy', 0):.2%}")
+        st.metric("Best match model", metrics.get("best_match_model", "N/A"))
     with c2:
-        st.metric("Training matches", f"{metrics.get('training_rows', 0):,}")
+        st.metric("Match accuracy", f"{metrics.get('accuracy', 0):.2%}")
     with c3:
         st.metric("2026 teams available", f"{len(present_qualified)}/48")
+
+    c4, c5 = st.columns(2)
+    with c4:
+        st.metric("Training matches", f"{metrics.get('training_rows', 0):,}")
+    with c5:
+        st.metric("Tournament-success rows", f"{metrics.get('tournament_success_rows', 0):,}")
 
     if missing_qualified:
         st.warning("Missing teams: " + ", ".join(missing_qualified))
@@ -487,16 +519,65 @@ with report_tab:
         "Loaded and cleaned players, matches, rankings, squads, and country-name datasets.",
         "Aligned country names across datasets with explicit aliases.",
         "Created goal difference and home-win target variables.",
-        "Built team features from player data: rating, age, balance, and player pool size.",
+        "Built team features from player data: overall, attack, midfield, defense, goalkeeper, age, balance, elite players, and player pool size.",
         "Merged FIFA rankings and points into team-level features.",
         "Converted team data into match-level feature differences.",
         "Filtered to matches from 2005 onward for modern-football training data.",
-        "Trained Logistic Regression and stored probability outputs for predictions.",
+        "Compared Logistic Regression, Random Forest, SVM, Naive Bayes, and MLP for match-outcome prediction.",
+        "Compared Linear, Ridge, Lasso, Random Forest, SVR, and MLP regressors for goal-difference prediction.",
+        "Built a tournament-success dataset to predict advancement past the group stage.",
         "Generated local model artifacts used by the Streamlit app.",
         "Simulated 2026 group and knockout outcomes with repeated Monte Carlo runs.",
     ]
     for step in pipeline_steps:
         st.write(f"- {step}")
 
+    st.subheader("Match Outcome Models")
+    classification_df = metrics_table(
+        metrics.get("classification_models", {}),
+        ["accuracy", "precision", "recall", "f1", "roc_auc"],
+    )
+    if not classification_df.empty:
+        st.dataframe(
+            classification_df.sort_values("ACCURACY", ascending=False),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    st.subheader("Goal Difference Models")
+    regression_df = metrics_table(
+        metrics.get("regression_models", {}),
+        ["mae", "rmse", "r2"],
+    )
+    if not regression_df.empty:
+        st.dataframe(
+            regression_df.sort_values("RMSE", ascending=True),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    st.subheader("Tournament Success Models")
+    tournament_df = metrics_table(
+        metrics.get("tournament_success_models", {}),
+        ["accuracy", "roc_auc", "precision", "recall", "f1"],
+    )
+    if not tournament_df.empty:
+        st.dataframe(
+            tournament_df.sort_values("ACCURACY", ascending=False),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    feature_importance = pd.DataFrame(metrics.get("feature_importance", []))
+    if not feature_importance.empty:
+        st.subheader("Feature Importance")
+        st.dataframe(feature_importance, use_container_width=True, hide_index=True)
+
+    data_gaps = metrics.get("data_gaps", [])
+    if data_gaps:
+        st.subheader("Known Data Gaps")
+        for gap in data_gaps:
+            st.write(f"- {gap}")
+
 st.divider()
-st.caption("Model: Logistic Regression | Data: international matches from 2005 onward")
+st.caption(f"Model: {metrics.get('best_match_model', 'trained classifier')} | Data: international matches from 2005 onward")
