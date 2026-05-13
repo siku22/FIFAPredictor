@@ -27,6 +27,71 @@ PREDICTION_COLUMNS = [
     "total_points",
 ]
 
+TEAM_NAME_ALIASES = {
+    "Bosnia Herzegovina": "Bosnia and Herzegovina",
+    "Cabo Verde": "Cape Verde",
+    "Cape Verde Islands": "Cape Verde",
+    "Congo DR": "DR Congo",
+    "Curacao": "Curaçao",
+    "Czech Republic": "Czechia",
+    "Côte d'Ivoire": "Ivory Coast",
+    "IR Iran": "Iran",
+    "Korea Republic": "South Korea",
+    "Turkey": "Türkiye",
+    "USA": "United States",
+}
+
+QUALIFIED_2026_TEAMS = [
+    "Canada",
+    "Mexico",
+    "United States",
+    "Australia",
+    "Iraq",
+    "Iran",
+    "Japan",
+    "Jordan",
+    "South Korea",
+    "Qatar",
+    "Saudi Arabia",
+    "Uzbekistan",
+    "Algeria",
+    "Cape Verde",
+    "DR Congo",
+    "Ivory Coast",
+    "Egypt",
+    "Ghana",
+    "Morocco",
+    "Senegal",
+    "South Africa",
+    "Tunisia",
+    "Curaçao",
+    "Haiti",
+    "Panama",
+    "Argentina",
+    "Brazil",
+    "Colombia",
+    "Ecuador",
+    "Paraguay",
+    "Uruguay",
+    "New Zealand",
+    "Austria",
+    "Belgium",
+    "Bosnia and Herzegovina",
+    "Croatia",
+    "Czechia",
+    "England",
+    "France",
+    "Germany",
+    "Netherlands",
+    "Norway",
+    "Portugal",
+    "Scotland",
+    "Spain",
+    "Sweden",
+    "Switzerland",
+    "Türkiye",
+]
+
 
 def clean_columns(df):
     df = df.copy()
@@ -54,6 +119,9 @@ def load_data(base_dir=BASE_DIR):
 
 
 def build_team_features(players, rankings):
+    players = players.copy()
+    players["nationality"] = players["nationality"].replace(TEAM_NAME_ALIASES)
+
     team_features = (
         players.groupby("nationality")
         .agg(
@@ -73,6 +141,7 @@ def build_team_features(players, rankings):
             "diff.points": "diff_points",
         }
     ).copy()
+    rankings["team"] = rankings["team"].replace(TEAM_NAME_ALIASES)
     rankings["date"] = pd.to_datetime(rankings["date"].astype(str), format="%Y", errors="coerce")
 
     latest_rankings = rankings.sort_values("date").groupby("team", as_index=False).tail(1)
@@ -82,6 +151,28 @@ def build_team_features(players, rankings):
         on="team",
         how="left",
     )
+
+    median_player_features = team_features[
+        ["avg_overall", "avg_age", "team_balance", "num_players"]
+    ].median(numeric_only=True)
+    for team in QUALIFIED_2026_TEAMS:
+        if team not in set(team_features["team"]):
+            rank_row = latest_rankings[latest_rankings["team"] == team]
+            fallback = {
+                "team": team,
+                "avg_overall": median_player_features["avg_overall"],
+                "avg_age": median_player_features["avg_age"],
+                "team_balance": median_player_features["team_balance"],
+                "num_players": median_player_features["num_players"],
+                "rank": pd.NA,
+                "total_points": pd.NA,
+                "previous_points": pd.NA,
+                "diff_points": pd.NA,
+            }
+            if not rank_row.empty:
+                fallback.update(rank_row.iloc[0][["rank", "total_points", "previous_points", "diff_points"]].to_dict())
+            team_features = pd.concat([team_features, pd.DataFrame([fallback])], ignore_index=True)
+
     return team_features
 
 

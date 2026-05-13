@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import joblib
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -22,24 +23,94 @@ PREDICTION_COLUMNS = [
     "rank",
     "total_points",
 ]
+TEAM_NAME_ALIASES = {
+    "Bosnia Herzegovina": "Bosnia and Herzegovina",
+    "Cabo Verde": "Cape Verde",
+    "Cape Verde Islands": "Cape Verde",
+    "Congo DR": "DR Congo",
+    "Curacao": "Curaçao",
+    "Czech Republic": "Czechia",
+    "Côte d'Ivoire": "Ivory Coast",
+    "IR Iran": "Iran",
+    "Korea Republic": "South Korea",
+    "Turkey": "Türkiye",
+    "USA": "United States",
+}
+QUALIFIED_2026_TEAMS = [
+    "Canada",
+    "Mexico",
+    "United States",
+    "Australia",
+    "Iraq",
+    "Iran",
+    "Japan",
+    "Jordan",
+    "South Korea",
+    "Qatar",
+    "Saudi Arabia",
+    "Uzbekistan",
+    "Algeria",
+    "Cape Verde",
+    "DR Congo",
+    "Ivory Coast",
+    "Egypt",
+    "Ghana",
+    "Morocco",
+    "Senegal",
+    "South Africa",
+    "Tunisia",
+    "Curaçao",
+    "Haiti",
+    "Panama",
+    "Argentina",
+    "Brazil",
+    "Colombia",
+    "Ecuador",
+    "Paraguay",
+    "Uruguay",
+    "New Zealand",
+    "Austria",
+    "Belgium",
+    "Bosnia and Herzegovina",
+    "Croatia",
+    "Czechia",
+    "England",
+    "France",
+    "Germany",
+    "Netherlands",
+    "Norway",
+    "Portugal",
+    "Scotland",
+    "Spain",
+    "Sweden",
+    "Switzerland",
+    "Türkiye",
+]
 
 
 @st.cache_resource
 def load_artifacts():
     model_path = BASE_DIR / "fifa_model.pkl"
     features_path = BASE_DIR / "team_features.pkl"
+    metrics_path = BASE_DIR / "model_metrics.pkl"
 
     if not model_path.exists() or not features_path.exists():
         raise FileNotFoundError(
             "Model files are missing. Run `python3 train_model.py` first."
         )
 
-    return joblib.load(model_path), joblib.load(features_path)
+    metrics = joblib.load(metrics_path) if metrics_path.exists() else {}
+    return joblib.load(model_path), joblib.load(features_path), metrics
 
 
 def prediction_ready_teams(team_features):
     ready = team_features.dropna(subset=PREDICTION_COLUMNS)
     return sorted(ready["team"].dropna().unique())
+
+
+def qualified_prediction_teams(team_features):
+    ready = set(prediction_ready_teams(team_features))
+    return [team for team in QUALIFIED_2026_TEAMS if team in ready]
 
 
 def predict_match(team_a_name, team_b_name, team_features, model):
@@ -70,44 +141,362 @@ def predict_match(team_a_name, team_b_name, team_features, model):
     }
 
 
+@st.cache_data
+def load_world_cup_groups():
+    groups_path = BASE_DIR / "2026_world_cup_groups.csv"
+    groups = pd.read_csv(groups_path)
+    groups.columns = groups.columns.str.strip().str.lower().str.replace(" ", "_")
+    groups["team"] = groups["team"].replace(TEAM_NAME_ALIASES)
+    return groups
+
+
+def build_probability_lookup(groups, team_features, model):
+    teams_in_groups = groups["team"].dropna().unique()
+    ready_teams = set(prediction_ready_teams(team_features))
+    teams_in_model = [team for team in teams_in_groups if team in ready_teams]
+
+    probabilities = {}
+    for team_a in teams_in_model:
+        for team_b in teams_in_model:
+            if team_a == team_b:
+                continue
+            result = predict_match(team_a, team_b, team_features, model)
+            probabilities[(team_a, team_b)] = result["team_a_probability"]
+
+    return probabilities, teams_in_model
+
+
+def simulate_game(team_a, team_b, probabilities, rng, allow_draw=False):
+    prob_a = probabilities[(team_a, team_b)]
+
+    if allow_draw:
+        closeness = 1 - min(abs(prob_a - 0.5) * 2, 1)
+        draw_probability = 0.18 + (0.12 * closeness)
+        win_probability = (1 - draw_probability) * prob_a
+        roll = rng.random()
+
+        if roll < win_probability:
+            return team_a
+        if roll < win_probability + draw_probability:
+            return "Draw"
+        return team_b
+
+    return team_a if rng.random() < prob_a else team_b
+
+
+def simulate_group(group_name, group_teams, probabilities, rng):
+    table = {
+        team: {
+            "group": group_name,
+            "team": team,
+            "group_position": 0,
+            "points": 0,
+            "wins": 0,
+            "goal_diff": 0,
+            "goals_for": 0,
+        }
+        for team in group_teams
+    }
+
+    for i, team_a in enumerate(group_teams):
+        for team_b in group_teams[i + 1 :]:
+            result = simulate_game(team_a, team_b, probabilities, rng, allow_draw=True)
+            strength_gap = abs(probabilities[(team_a, team_b)] - 0.5)
+            goal_margin = int(rng.choice([1, 1, 2, 2, 3], p=[0.34, 0.26, 0.22, 0.13, 0.05]))
+            if strength_gap > 0.25:
+                goal_margin += int(rng.random() < 0.25)
+
+            if result == "Draw":
+                draw_goals = int(rng.choice([0, 1, 1, 2], p=[0.25, 0.45, 0.2, 0.1]))
+                table[team_a]["points"] += 1
+                table[team_b]["points"] += 1
+                table[team_a]["goals_for"] += draw_goals
+                table[team_b]["goals_for"] += draw_goals
+            elif result == team_a:
+                loser_goals = int(rng.choice([0, 0, 1, 1, 2], p=[0.34, 0.22, 0.25, 0.14, 0.05]))
+                table[team_a]["points"] += 3
+                table[team_a]["wins"] += 1
+                table[team_a]["goal_diff"] += goal_margin
+                table[team_a]["goals_for"] += loser_goals + goal_margin
+                table[team_b]["goal_diff"] -= goal_margin
+                table[team_b]["goals_for"] += loser_goals
+            else:
+                loser_goals = int(rng.choice([0, 0, 1, 1, 2], p=[0.34, 0.22, 0.25, 0.14, 0.05]))
+                table[team_b]["points"] += 3
+                table[team_b]["wins"] += 1
+                table[team_b]["goal_diff"] += goal_margin
+                table[team_b]["goals_for"] += loser_goals + goal_margin
+                table[team_a]["goal_diff"] -= goal_margin
+                table[team_a]["goals_for"] += loser_goals
+
+    ranked = sorted(
+        table.values(),
+        key=lambda row: (
+            row["points"],
+            row["goal_diff"],
+            row["goals_for"],
+            row["wins"],
+            rng.random(),
+        ),
+        reverse=True,
+    )
+
+    for position, row in enumerate(ranked, start=1):
+        row["group_position"] = position
+
+    return ranked
+
+
+def rank_qualified_teams(group_tables, rng):
+    direct_qualifiers = []
+    third_place_teams = []
+    for table in group_tables.values():
+        direct_qualifiers.extend(table[:2])
+        third_place_teams.append(table[2])
+
+    best_thirds = sorted(
+        third_place_teams,
+        key=lambda row: (
+            row["points"],
+            row["goal_diff"],
+            row["goals_for"],
+            row["wins"],
+            rng.random(),
+        ),
+        reverse=True,
+    )[:8]
+
+    qualifiers = direct_qualifiers + best_thirds
+    seeded = sorted(
+        qualifiers,
+        key=lambda row: (
+            row["group_position"] == 1,
+            row["group_position"] == 2,
+            row["points"],
+            row["goal_diff"],
+            row["goals_for"],
+            row["wins"],
+            rng.random(),
+        ),
+        reverse=True,
+    )
+
+    return seeded
+
+
+def build_seeded_knockout_pairings(qualified_teams):
+    teams = [row["team"] for row in qualified_teams]
+    bracket_order = [0, 31, 15, 16, 7, 24, 8, 23, 3, 28, 12, 19, 4, 27, 11, 20,
+                     1, 30, 14, 17, 6, 25, 9, 22, 2, 29, 13, 18, 5, 26, 10, 21]
+    ordered = [teams[index] for index in bracket_order]
+    return list(zip(ordered[0::2], ordered[1::2]))
+
+
+def play_knockout_round(pairings, probabilities, rng):
+    return [simulate_game(team_a, team_b, probabilities, rng) for team_a, team_b in pairings]
+
+
+def pair_adjacent(teams):
+    return list(zip(teams[0::2], teams[1::2]))
+
+
+def simulate_tournament(groups, probabilities, rng):
+    group_tables = {}
+    for group_name, group_df in groups.groupby("group", sort=True):
+        teams = group_df["team"].tolist()
+        group_tables[group_name] = simulate_group(group_name, teams, probabilities, rng)
+
+    qualified_teams = rank_qualified_teams(group_tables, rng)
+    round_of_32_pairings = build_seeded_knockout_pairings(qualified_teams)
+    round_of_16_teams = play_knockout_round(round_of_32_pairings, probabilities, rng)
+    quarterfinalists = play_knockout_round(pair_adjacent(round_of_16_teams), probabilities, rng)
+    semifinalists = play_knockout_round(pair_adjacent(quarterfinalists), probabilities, rng)
+    finalists = play_knockout_round(pair_adjacent(semifinalists), probabilities, rng)
+    champion = play_knockout_round(pair_adjacent(finalists), probabilities, rng)[0]
+
+    return {
+        "group_winners": [table[0]["team"] for table in group_tables.values()],
+        "round_of_32": [row["team"] for row in qualified_teams],
+        "round_of_16": round_of_16_teams,
+        "quarterfinals": quarterfinalists,
+        "semifinals": semifinalists,
+        "finalists": finalists,
+        "champion": champion,
+    }
+
+
+def run_world_cup_simulations(groups, team_features, model, simulation_count, seed):
+    probabilities, teams_in_model = build_probability_lookup(groups, team_features, model)
+    missing_teams = sorted(set(groups["team"]) - set(teams_in_model))
+
+    if missing_teams:
+        return None, missing_teams
+
+    rng = np.random.default_rng(seed)
+    counts = {
+        team: {
+            "Group Winner": 0,
+            "Round of 32": 0,
+            "Round of 16": 0,
+            "Quarterfinalist": 0,
+            "Semifinalist": 0,
+            "Finalist": 0,
+            "Champion": 0,
+        }
+        for team in groups["team"].unique()
+    }
+
+    for _ in range(simulation_count):
+        result = simulate_tournament(groups, probabilities, rng)
+        for team in result["group_winners"]:
+            counts[team]["Group Winner"] += 1
+        for team in result["round_of_32"]:
+            counts[team]["Round of 32"] += 1
+        for team in result["round_of_16"]:
+            counts[team]["Round of 16"] += 1
+        for team in result["quarterfinals"]:
+            counts[team]["Quarterfinalist"] += 1
+        for team in result["semifinals"]:
+            counts[team]["Semifinalist"] += 1
+        for team in result["finalists"]:
+            counts[team]["Finalist"] += 1
+        counts[result["champion"]]["Champion"] += 1
+
+    summary = pd.DataFrame.from_dict(counts, orient="index").reset_index(names="Team")
+    for column in summary.columns[1:]:
+        summary[column] = summary[column] / simulation_count
+
+    return summary.sort_values("Champion", ascending=False), missing_teams
+
+
 st.set_page_config(page_title="2026 FIFA Predictor", page_icon="soccer", layout="wide")
 st.title("2026 FIFA World Cup Predictor")
 st.caption("Predict match outcomes using FIFA rankings, player ratings, and team composition.")
 st.divider()
 
 try:
-    model, team_features = load_artifacts()
+    model, team_features, metrics = load_artifacts()
 except FileNotFoundError as exc:
     st.error(str(exc))
     st.stop()
 
-teams = prediction_ready_teams(team_features)
+match_tab, simulator_tab, report_tab = st.tabs(["Match Predictor", "World Cup Simulator", "Model Report"])
 
-col1, col2 = st.columns(2)
-with col1:
-    team_a = st.selectbox("Team A", teams, index=teams.index("Brazil") if "Brazil" in teams else 0)
-with col2:
-    default_b = teams.index("France") if "France" in teams else min(1, len(teams) - 1)
-    team_b = st.selectbox("Team B", teams, index=default_b)
+with match_tab:
+    only_qualified = st.toggle("2026 qualified teams only", value=True)
+    teams = qualified_prediction_teams(team_features) if only_qualified else prediction_ready_teams(team_features)
+    missing_qualified = sorted(set(QUALIFIED_2026_TEAMS) - set(qualified_prediction_teams(team_features)))
 
-if st.button("Predict", use_container_width=True):
-    if team_a == team_b:
-        st.warning("Pick two different teams.")
+    if missing_qualified:
+        st.warning("Missing qualified teams: " + ", ".join(missing_qualified))
+    elif only_qualified:
+        st.success("All 48 qualified 2026 World Cup teams are available.")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        team_a = st.selectbox("Team A", teams, index=teams.index("Brazil") if "Brazil" in teams else 0)
+    with col2:
+        default_b = teams.index("France") if "France" in teams else min(1, len(teams) - 1)
+        team_b = st.selectbox("Team B", teams, index=default_b)
+
+    if st.button("Predict", use_container_width=True):
+        if team_a == team_b:
+            st.warning("Pick two different teams.")
+        else:
+            result = predict_match(team_a, team_b, team_features, model)
+            winner = result["winner"]
+            prob_a = result["team_a_probability"]
+            prob_b = result["team_b_probability"]
+
+            st.subheader(f"{winner} is more likely to win")
+            metric_a, metric_b = st.columns(2)
+            with metric_a:
+                st.metric(team_a, f"{prob_a:.2%}")
+            with metric_b:
+                st.metric(team_b, f"{prob_b:.2%}")
+
+            st.progress(float(prob_a), text=f"{team_a} win probability")
+            st.success(f"Prediction favors {winner}")
+
+with simulator_tab:
+    groups = load_world_cup_groups()
+    st.caption("2026 format: 12 groups, top two from each group plus the eight best third-place teams advance.")
+
+    group_grid = groups.groupby("group")["team"].apply(list)
+    with st.expander("View 2026 groups"):
+        group_cols = st.columns(4)
+        for index, (group_name, group_teams) in enumerate(group_grid.items()):
+            with group_cols[index % 4]:
+                st.markdown(f"**Group {group_name}**")
+                st.write(", ".join(group_teams))
+
+    simulation_count = st.slider(
+        "Simulations",
+        min_value=100,
+        max_value=10000,
+        value=1000,
+        step=100,
+    )
+    seed = st.number_input("Random seed", min_value=1, max_value=999999, value=42, step=1)
+
+    if st.button("Run World Cup Simulation", use_container_width=True):
+        with st.spinner(f"Running {simulation_count:,} tournament simulations..."):
+            summary, missing_teams = run_world_cup_simulations(
+                groups, team_features, model, simulation_count, int(seed)
+            )
+
+        if missing_teams:
+            st.error(
+                "Some group teams are missing model-ready features: "
+                + ", ".join(missing_teams)
+            )
+        else:
+            champion = summary.iloc[0]
+            st.subheader(f"Most likely champion: {champion['Team']}")
+            st.metric("Champion rate", f"{champion['Champion']:.2%}")
+            st.caption("Knockout rounds use a seeded 32-team bracket based on simulated group performance.")
+
+            chart_data = summary.set_index("Team")["Champion"].head(12)
+            st.bar_chart(chart_data)
+
+            display_summary = summary.copy()
+            for column in display_summary.columns[1:]:
+                display_summary[column] = display_summary[column].map("{:.2%}".format)
+
+            st.dataframe(display_summary, use_container_width=True, hide_index=True)
+
+with report_tab:
+    present_qualified = qualified_prediction_teams(team_features)
+    missing_qualified = sorted(set(QUALIFIED_2026_TEAMS) - set(present_qualified))
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("Model accuracy", f"{metrics.get('accuracy', 0):.2%}")
+    with c2:
+        st.metric("Training matches", f"{metrics.get('training_rows', 0):,}")
+    with c3:
+        st.metric("2026 teams available", f"{len(present_qualified)}/48")
+
+    if missing_qualified:
+        st.warning("Missing teams: " + ", ".join(missing_qualified))
     else:
-        result = predict_match(team_a, team_b, team_features, model)
-        winner = result["winner"]
-        prob_a = result["team_a_probability"]
-        prob_b = result["team_b_probability"]
+        st.success("All 48 qualified 2026 World Cup teams are available in the predictor.")
 
-        st.subheader(f"{winner} is more likely to win")
-        metric_a, metric_b = st.columns(2)
-        with metric_a:
-            st.metric(team_a, f"{prob_a:.2%}")
-        with metric_b:
-            st.metric(team_b, f"{prob_b:.2%}")
-
-        st.progress(float(prob_a), text=f"{team_a} win probability")
-        st.success(f"Prediction favors {winner}")
+    st.subheader("Pipeline")
+    pipeline_steps = [
+        "Loaded and cleaned players, matches, rankings, squads, and country-name datasets.",
+        "Aligned country names across datasets with explicit aliases.",
+        "Created goal difference and home-win target variables.",
+        "Built team features from player data: rating, age, balance, and player pool size.",
+        "Merged FIFA rankings and points into team-level features.",
+        "Converted team data into match-level feature differences.",
+        "Filtered to matches from 2005 onward for modern-football training data.",
+        "Trained Logistic Regression and stored probability outputs for predictions.",
+        "Generated local model artifacts used by the Streamlit app.",
+        "Simulated 2026 group and knockout outcomes with repeated Monte Carlo runs.",
+    ]
+    for step in pipeline_steps:
+        st.write(f"- {step}")
 
 st.divider()
 st.caption("Model: Logistic Regression | Data: international matches from 2005 onward")
