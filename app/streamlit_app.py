@@ -136,6 +136,298 @@ def metrics_table(results, columns):
     return pd.DataFrame(rows)
 
 
+def inject_soccer_theme():
+    st.markdown(
+        """
+        <style>
+        :root {
+            --pitch: #0b5d3b;
+            --pitch-dark: #063823;
+            --line: rgba(255, 255, 255, 0.18);
+            --gold: #d6b35a;
+            --mint: #78d6a3;
+            --ink: #102017;
+        }
+
+        .stApp {
+            background:
+                linear-gradient(90deg, rgba(255,255,255,0.055) 1px, transparent 1px),
+                linear-gradient(0deg, rgba(255,255,255,0.05) 1px, transparent 1px),
+                radial-gradient(circle at 50% 16%, rgba(214,179,90,0.18), transparent 24%),
+                linear-gradient(135deg, #08371f 0%, #0b5d3b 48%, #062f22 100%);
+            background-size: 72px 72px, 72px 72px, auto, auto;
+            color: #f7fbf6;
+        }
+
+        .block-container {
+            max-width: 1180px;
+            padding-top: 2rem;
+            padding-bottom: 3rem;
+        }
+
+        h1, h2, h3 {
+            letter-spacing: 0;
+        }
+
+        [data-testid="stHeader"] {
+            background: transparent;
+        }
+
+        [data-testid="stTabs"] button {
+            color: #ecfff4;
+            border-radius: 999px;
+        }
+
+        [data-testid="stTabs"] button[aria-selected="true"] {
+            background: rgba(255,255,255,0.16);
+            color: #ffffff;
+        }
+
+        [data-testid="stMetric"] {
+            background: rgba(255, 255, 255, 0.92);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+            border-radius: 8px;
+            padding: 1rem;
+            box-shadow: 0 16px 36px rgba(0, 0, 0, 0.16);
+        }
+
+        [data-testid="stMetric"] label,
+        [data-testid="stMetric"] [data-testid="stMetricValue"] {
+            color: var(--ink);
+        }
+
+        div[data-testid="stDataFrame"],
+        div[data-testid="stExpander"],
+        div[data-testid="stAlert"],
+        div[data-testid="stForm"] {
+            border-radius: 8px;
+        }
+
+        .hero-panel {
+            position: relative;
+            overflow: hidden;
+            border-radius: 8px;
+            padding: 2rem;
+            border: 1px solid rgba(255,255,255,0.22);
+            background:
+                linear-gradient(90deg, rgba(255,255,255,0.13) 1px, transparent 1px),
+                linear-gradient(rgba(255,255,255,0.08), rgba(255,255,255,0.02)),
+                linear-gradient(135deg, rgba(10,88,54,0.95), rgba(5,48,32,0.95));
+            box-shadow: 0 22px 60px rgba(0,0,0,0.24);
+        }
+
+        .hero-panel:before {
+            content: "";
+            position: absolute;
+            inset: 18px;
+            border: 2px solid rgba(255,255,255,0.22);
+            border-radius: 8px;
+            pointer-events: none;
+        }
+
+        .hero-panel:after {
+            content: "";
+            position: absolute;
+            width: 170px;
+            height: 170px;
+            border: 2px solid rgba(255,255,255,0.18);
+            border-radius: 50%;
+            top: 50%;
+            right: 8%;
+            transform: translateY(-50%);
+            pointer-events: none;
+        }
+
+        .eyebrow {
+            color: var(--mint);
+            font-size: 0.8rem;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            margin-bottom: 0.4rem;
+        }
+
+        .hero-title {
+            color: #ffffff;
+            font-size: clamp(2rem, 5vw, 4.1rem);
+            line-height: 1;
+            font-weight: 900;
+            margin: 0;
+            max-width: 780px;
+        }
+
+        .hero-copy {
+            color: rgba(255,255,255,0.82);
+            font-size: 1.05rem;
+            max-width: 760px;
+            margin-top: 1rem;
+        }
+
+        .stat-strip {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 0.8rem;
+            margin: 1.2rem 0 1.4rem;
+        }
+
+        .stat-card,
+        .scoreboard,
+        .section-card {
+            background: rgba(255,255,255,0.94);
+            color: var(--ink);
+            border: 1px solid rgba(255,255,255,0.52);
+            border-radius: 8px;
+            padding: 1rem;
+            box-shadow: 0 18px 40px rgba(0,0,0,0.15);
+        }
+
+        .stat-label {
+            color: #496256;
+            font-size: 0.78rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .stat-value {
+            font-size: 1.55rem;
+            font-weight: 900;
+            margin-top: 0.2rem;
+        }
+
+        .scoreboard {
+            text-align: center;
+            margin-top: 1rem;
+        }
+
+        .score-row {
+            display: grid;
+            grid-template-columns: 1fr auto 1fr;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .team-name {
+            font-size: clamp(1.25rem, 3vw, 2rem);
+            font-weight: 900;
+        }
+
+        .vs-badge {
+            background: var(--pitch);
+            color: #ffffff;
+            padding: 0.4rem 0.75rem;
+            border-radius: 999px;
+            font-weight: 900;
+            border: 2px solid var(--gold);
+        }
+
+        .winner-banner {
+            margin-top: 1rem;
+            background: linear-gradient(90deg, #0b5d3b, #13784f);
+            color: white;
+            border-radius: 8px;
+            padding: 1rem;
+            border: 1px solid rgba(255,255,255,0.25);
+        }
+
+        .group-pill {
+            display: inline-block;
+            margin: 0.18rem;
+            padding: 0.28rem 0.55rem;
+            border-radius: 999px;
+            background: rgba(11,93,59,0.1);
+            color: #0c3d2a;
+            border: 1px solid rgba(11,93,59,0.2);
+            font-weight: 650;
+            font-size: 0.88rem;
+        }
+
+        @media (max-width: 780px) {
+            .stat-strip,
+            .score-row {
+                grid-template-columns: 1fr;
+            }
+            .hero-panel {
+                padding: 1.4rem;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_hero(metrics):
+    st.markdown(
+        f"""
+        <div class="hero-panel">
+            <div class="eyebrow">World Cup analytics dashboard</div>
+            <h1 class="hero-title">2026 FIFA World Cup Predictor</h1>
+            <div class="hero-copy">
+                Match probabilities and tournament simulations powered by player ratings,
+                team composition, FIFA rankings, and historical international results.
+            </div>
+        </div>
+        <div class="stat-strip">
+            <div class="stat-card">
+                <div class="stat-label">Best Model</div>
+                <div class="stat-value">{metrics.get("best_match_model", "N/A")}</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Accuracy</div>
+                <div class="stat-value">{metrics.get("accuracy", 0):.1%}</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Qualified Teams</div>
+                <div class="stat-value">48</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Sim Format</div>
+                <div class="stat-value">12 Groups</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_scoreboard(team_a, team_b, winner, prob_a, prob_b):
+    st.markdown(
+        f"""
+        <div class="scoreboard">
+            <div class="score-row">
+                <div>
+                    <div class="team-name">{team_a}</div>
+                    <div>{prob_a:.2%}</div>
+                </div>
+                <div class="vs-badge">VS</div>
+                <div>
+                    <div class="team-name">{team_b}</div>
+                    <div>{prob_b:.2%}</div>
+                </div>
+            </div>
+            <div class="winner-banner">
+                <strong>{winner}</strong> is the model favorite for this matchup.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_group_card(group_name, group_teams):
+    teams_markup = "".join(f'<span class="group-pill">{team}</span>' for team in group_teams)
+    st.markdown(
+        f"""
+        <div class="section-card">
+            <div class="stat-label">Group {group_name}</div>
+            <div style="margin-top:0.45rem;">{teams_markup}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def predict_match(team_a_name, team_b_name, team_features, model):
     tf = team_features.copy()
     tf["team_clean"] = tf["team"].str.lower().str.strip()
@@ -398,15 +690,15 @@ def run_world_cup_simulations(groups, team_features, model, simulation_count, se
 
 
 st.set_page_config(page_title="2026 FIFA Predictor", page_icon="soccer", layout="wide")
-st.title("2026 FIFA World Cup Predictor")
-st.caption("Predict match outcomes using FIFA rankings, player ratings, and team composition.")
-st.divider()
 
 try:
     model, team_features, metrics = load_artifacts()
 except FileNotFoundError as exc:
     st.error(str(exc))
     st.stop()
+
+inject_soccer_theme()
+render_hero(metrics)
 
 match_tab, simulator_tab, report_tab = st.tabs(["Match Predictor", "World Cup Simulator", "Model Report"])
 
@@ -436,7 +728,7 @@ with match_tab:
             prob_a = result["team_a_probability"]
             prob_b = result["team_b_probability"]
 
-            st.subheader(f"{winner} is more likely to win")
+            render_scoreboard(team_a, team_b, winner, prob_a, prob_b)
             metric_a, metric_b = st.columns(2)
             with metric_a:
                 st.metric(team_a, f"{prob_a:.2%}")
@@ -455,8 +747,7 @@ with simulator_tab:
         group_cols = st.columns(4)
         for index, (group_name, group_teams) in enumerate(group_grid.items()):
             with group_cols[index % 4]:
-                st.markdown(f"**Group {group_name}**")
-                st.write(", ".join(group_teams))
+                render_group_card(group_name, group_teams)
 
     simulation_count = st.slider(
         "Simulations",
@@ -480,8 +771,16 @@ with simulator_tab:
             )
         else:
             champion = summary.iloc[0]
-            st.subheader(f"Most likely champion: {champion['Team']}")
-            st.metric("Champion rate", f"{champion['Champion']:.2%}")
+            st.markdown(
+                f"""
+                <div class="winner-banner">
+                    <div class="stat-label" style="color:rgba(255,255,255,0.78);">Most likely champion</div>
+                    <div style="font-size:2rem;font-weight:900;">{champion['Team']}</div>
+                    <div>Champion rate: <strong>{champion['Champion']:.2%}</strong></div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
             st.caption("Knockout rounds use a seeded 32-team bracket based on simulated group performance.")
 
             chart_data = summary.set_index("Team")["Champion"].head(12)
