@@ -1,9 +1,15 @@
 from pathlib import Path
 
 import joblib
+import numpy as np
 import pandas as pd
 from sklearn.dummy import DummyClassifier, DummyRegressor
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.ensemble import (
+    GradientBoostingClassifier,
+    HistGradientBoostingClassifier,
+    RandomForestClassifier,
+    RandomForestRegressor,
+)
 from sklearn.linear_model import Lasso, LinearRegression, LogisticRegression, Ridge
 from sklearn.metrics import (
     accuracy_score,
@@ -17,7 +23,7 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import GridSearchCV, train_test_split
 from sklearn.naive_bayes import GaussianNB
 from sklearn.neural_network import MLPClassifier, MLPRegressor
 from sklearn.pipeline import make_pipeline
@@ -30,6 +36,12 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 RAW_DATA_DIR = ROOT_DIR / "data" / "raw"
 PROCESSED_DATA_DIR = ROOT_DIR / "data" / "processed"
 MODELS_DIR = ROOT_DIR / "models"
+
+SIMULATION_MODEL_NAMES = [
+    "Tuned Random Forest",
+    "Logistic Regression",
+    "SVM",
+]
 
 FEATURES = [
     "overall_diff",
@@ -48,6 +60,11 @@ FEATURES = [
     "rank_points_blend",
     "attack_vs_defense_gap",
     "abs_strength_gap",
+    "recent_win_rate_diff_5",
+    "recent_goal_diff_diff_10",
+    "recent_goals_for_diff_10",
+    "recent_goals_against_diff_10",
+    "recent_match_count_diff",
 ]
 
 PREDICTION_COLUMNS = [
@@ -62,6 +79,11 @@ PREDICTION_COLUMNS = [
     "elite_players",
     "rank",
     "total_points",
+    "recent_win_rate_5",
+    "recent_goal_diff_10",
+    "recent_goals_for_10",
+    "recent_goals_against_10",
+    "recent_matches",
 ]
 
 BASE_MATCH_FEATURES = [
@@ -76,6 +98,11 @@ BASE_MATCH_FEATURES = [
     "elite_player_diff",
     "rank_advantage",
     "points_diff",
+    "recent_win_rate_diff_5",
+    "recent_goal_diff_diff_10",
+    "recent_goals_for_diff_10",
+    "recent_goals_against_diff_10",
+    "recent_match_count_diff",
 ]
 
 TEAM_NAME_ALIASES = {
@@ -168,7 +195,76 @@ def position_mean(group, mask_column):
     return values.mean() if len(values) else group["overall"].mean()
 
 
-def build_team_features(players, rankings):
+def prepare_rankings(rankings):
+    rankings = rankings.rename(
+        columns={
+            "total.points": "total_points",
+            "previous.points": "previous_points",
+            "diff.points": "diff_points",
+        }
+    ).copy()
+    rankings["team"] = rankings["team"].replace(TEAM_NAME_ALIASES)
+    rankings["date"] = pd.to_datetime(rankings["date"].astype(str), format="%Y", errors="coerce")
+    rankings = rankings.dropna(subset=["date", "team", "rank", "total_points"])
+    return rankings.sort_values(["team", "date"])
+
+
+def build_form_history(matches, names):
+    name_map = dict(zip(names["former"], names["current"]))
+    matches = matches.copy()
+    matches["home_team"] = matches["home_team"].replace(name_map).replace(TEAM_NAME_ALIASES)
+    matches["away_team"] = matches["away_team"].replace(name_map).replace(TEAM_NAME_ALIASES)
+    matches["date"] = pd.to_datetime(matches["date"], errors="coerce")
+    matches = matches.dropna(subset=["date", "home_team", "away_team", "home_goals", "away_goals"])
+
+    home_rows = matches[
+        ["date", "home_team", "away_team", "home_goals", "away_goals"]
+    ].rename(
+        columns={
+            "home_team": "team",
+            "away_team": "opponent",
+            "home_goals": "goals_for",
+            "away_goals": "goals_against",
+        }
+    )
+    away_rows = matches[
+        ["date", "away_team", "home_team", "away_goals", "home_goals"]
+    ].rename(
+        columns={
+            "away_team": "team",
+            "home_team": "opponent",
+            "away_goals": "goals_for",
+            "home_goals": "goals_against",
+        }
+    )
+    form = pd.concat([home_rows, away_rows], ignore_index=True).sort_values(["team", "date"])
+    form["win"] = (form["goals_for"] > form["goals_against"]).astype(int)
+    form["goal_diff"] = form["goals_for"] - form["goals_against"]
+
+    grouped = form.groupby("team", group_keys=False)
+    form["recent_win_rate_5"] = grouped["win"].apply(lambda values: values.shift().rolling(5, min_periods=1).mean())
+    form["recent_goal_diff_10"] = grouped["goal_diff"].apply(lambda values: values.shift().rolling(10, min_periods=1).mean())
+    form["recent_goals_for_10"] = grouped["goals_for"].apply(lambda values: values.shift().rolling(10, min_periods=1).mean())
+    form["recent_goals_against_10"] = grouped["goals_against"].apply(
+        lambda values: values.shift().rolling(10, min_periods=1).mean()
+    )
+    form["recent_matches"] = grouped.cumcount()
+    return form
+
+
+def latest_form_features(form_history):
+    form_columns = [
+        "recent_win_rate_5",
+        "recent_goal_diff_10",
+        "recent_goals_for_10",
+        "recent_goals_against_10",
+        "recent_matches",
+    ]
+    latest = form_history.sort_values(["team", "date"]).groupby("team", as_index=False).tail(1)
+    return latest[["team", *form_columns]]
+
+
+def build_team_features(players, rankings, form_history=None):
     players = players.copy()
     players["nationality"] = players["nationality"].replace(TEAM_NAME_ALIASES)
     players["preferred_positions"] = players["preferred_positions"].fillna("")
@@ -207,15 +303,7 @@ def build_team_features(players, rankings):
     )
     team_features = team_features.merge(strengths, on="team", how="left")
 
-    rankings = rankings.rename(
-        columns={
-            "total.points": "total_points",
-            "previous.points": "previous_points",
-            "diff.points": "diff_points",
-        }
-    ).copy()
-    rankings["team"] = rankings["team"].replace(TEAM_NAME_ALIASES)
-    rankings["date"] = pd.to_datetime(rankings["date"].astype(str), format="%Y", errors="coerce")
+    rankings = prepare_rankings(rankings)
     latest_rankings = rankings.sort_values("date").groupby("team", as_index=False).tail(1)
 
     team_features = team_features.merge(
@@ -223,8 +311,26 @@ def build_team_features(players, rankings):
         on="team",
         how="left",
     )
+    if form_history is not None:
+        team_features = team_features.merge(latest_form_features(form_history), on="team", how="left")
 
-    median_features = team_features[PREDICTION_COLUMNS[:-2]].median(numeric_only=True)
+    form_columns = [
+        "recent_win_rate_5",
+        "recent_goal_diff_10",
+        "recent_goals_for_10",
+        "recent_goals_against_10",
+        "recent_matches",
+    ]
+    for column in form_columns:
+        if column not in team_features:
+            team_features[column] = pd.NA
+    team_features[form_columns] = team_features[form_columns].fillna(
+        team_features[form_columns].median(numeric_only=True)
+    )
+
+    median_features = team_features[[column for column in PREDICTION_COLUMNS if column not in {"rank", "total_points"}]].median(
+        numeric_only=True
+    )
     for team in QUALIFIED_2026_TEAMS:
         if team in set(team_features["team"]):
             continue
@@ -244,11 +350,70 @@ def build_team_features(players, rankings):
     return team_features
 
 
-def build_match_dataset(matches, names, team_features):
+def ranking_as_of_matches(match_rows, rankings, side):
+    lookup = rankings[["date", "team", "rank", "total_points", "previous_points", "diff_points"]].copy()
+    rows = []
+    team_column = f"{side}_team"
+    for team, group in match_rows[[team_column, "date"]].dropna().groupby(team_column):
+        history = lookup[lookup["team"] == team].sort_values("date")
+        if history.empty:
+            continue
+        group = group.reset_index(names="_row_id")
+        merged = pd.merge_asof(
+            group.sort_values("date"),
+            history,
+            on="date",
+            direction="backward",
+        )
+        rows.append(merged.set_index("_row_id").drop(columns=["team"]).rename(columns={team_column: "match_team"}))
+    if not rows:
+        return pd.DataFrame(index=match_rows.index)
+    ranked = pd.concat(rows).sort_index()
+    ranked = ranked.rename(
+        columns={
+            "rank": f"{side}_rank",
+            "total_points": f"{side}_total_points",
+            "previous_points": f"{side}_previous_points",
+            "diff_points": f"{side}_diff_points",
+        }
+    )
+    return ranked[[f"{side}_rank", f"{side}_total_points", f"{side}_previous_points", f"{side}_diff_points"]]
+
+
+def form_as_of_matches(match_rows, form_history, side):
+    form_columns = [
+        "recent_win_rate_5",
+        "recent_goal_diff_10",
+        "recent_goals_for_10",
+        "recent_goals_against_10",
+        "recent_matches",
+    ]
+    rows = []
+    team_column = f"{side}_team"
+    for team, group in match_rows[[team_column, "date"]].dropna().groupby(team_column):
+        history = form_history[form_history["team"] == team].sort_values("date")
+        if history.empty:
+            continue
+        group = group.reset_index(names="_row_id")
+        merged = pd.merge_asof(
+            group.sort_values("date"),
+            history[["date", *form_columns]],
+            on="date",
+            direction="backward",
+        )
+        rows.append(merged.set_index("_row_id").rename(columns={team_column: "match_team"}))
+    if not rows:
+        return pd.DataFrame(index=match_rows.index)
+    form_rows = pd.concat(rows).sort_index()
+    return form_rows[form_columns].add_prefix(f"{side}_")
+
+
+def build_match_dataset(matches, names, team_features, rankings, form_history):
     name_map = dict(zip(names["former"], names["current"]))
     matches = matches.copy()
     matches["home_team"] = matches["home_team"].replace(name_map).replace(TEAM_NAME_ALIASES)
     matches["away_team"] = matches["away_team"].replace(name_map).replace(TEAM_NAME_ALIASES)
+    matches["date"] = pd.to_datetime(matches["date"], errors="coerce")
     matches["goal_diff"] = matches["home_goals"] - matches["away_goals"]
     matches["home_win"] = (matches["goal_diff"] > 0).astype(int)
 
@@ -265,6 +430,24 @@ def build_match_dataset(matches, names, team_features):
         how="left",
     ).drop(columns="team")
 
+    rankings = prepare_rankings(rankings)
+    rank_columns = ["rank", "total_points", "previous_points", "diff_points"]
+    form_columns = [
+        "recent_win_rate_5",
+        "recent_goal_diff_10",
+        "recent_goals_for_10",
+        "recent_goals_against_10",
+        "recent_matches",
+    ]
+    compiled = compiled.drop(
+        columns=[f"{side}_{column}" for side in ("home", "away") for column in [*rank_columns, *form_columns]],
+        errors="ignore",
+    )
+    compiled = compiled.join(ranking_as_of_matches(compiled, rankings, "home"))
+    compiled = compiled.join(ranking_as_of_matches(compiled, rankings, "away"))
+    compiled = compiled.join(form_as_of_matches(compiled, form_history, "home"))
+    compiled = compiled.join(form_as_of_matches(compiled, form_history, "away"))
+
     compiled["overall_diff"] = compiled["home_avg_overall"] - compiled["away_avg_overall"]
     compiled["attack_diff"] = compiled["home_attack_strength"] - compiled["away_attack_strength"]
     compiled["midfield_diff"] = compiled["home_midfield_strength"] - compiled["away_midfield_strength"]
@@ -276,6 +459,13 @@ def build_match_dataset(matches, names, team_features):
     compiled["elite_player_diff"] = compiled["home_elite_players"] - compiled["away_elite_players"]
     compiled["rank_advantage"] = compiled["away_rank"] - compiled["home_rank"]
     compiled["points_diff"] = compiled["home_total_points"] - compiled["away_total_points"]
+    compiled["recent_win_rate_diff_5"] = compiled["home_recent_win_rate_5"] - compiled["away_recent_win_rate_5"]
+    compiled["recent_goal_diff_diff_10"] = compiled["home_recent_goal_diff_10"] - compiled["away_recent_goal_diff_10"]
+    compiled["recent_goals_for_diff_10"] = compiled["home_recent_goals_for_10"] - compiled["away_recent_goals_for_10"]
+    compiled["recent_goals_against_diff_10"] = (
+        compiled["home_recent_goals_against_10"] - compiled["away_recent_goals_against_10"]
+    )
+    compiled["recent_match_count_diff"] = compiled["home_recent_matches"] - compiled["away_recent_matches"]
     compiled = add_engineered_match_features(compiled)
 
     final_dataset = compiled[
@@ -308,7 +498,7 @@ def add_engineered_match_features(df):
 
 
 def classification_metrics(y_test, y_pred, y_prob=None):
-    return {
+    metrics = {
         "accuracy": accuracy_score(y_test, y_pred),
         "precision": precision_score(y_test, y_pred, zero_division=0),
         "recall": recall_score(y_test, y_pred, zero_division=0),
@@ -317,6 +507,17 @@ def classification_metrics(y_test, y_pred, y_prob=None):
         "confusion_matrix": confusion_matrix(y_test, y_pred).tolist(),
         "classification_report": classification_report(y_test, y_pred, output_dict=True, zero_division=0),
     }
+    if y_prob is not None:
+        confidence = np.maximum(y_prob, 1 - y_prob)
+        high_confidence = confidence >= 0.70
+        metrics["high_confidence_accuracy_70"] = (
+            accuracy_score(y_test[high_confidence], y_pred[high_confidence])
+            if high_confidence.any()
+            else None
+        )
+        metrics["high_confidence_coverage_70"] = float(high_confidence.mean())
+        metrics["high_confidence_rows_70"] = int(high_confidence.sum())
+    return metrics
 
 
 def evaluate_classification_models(X, y):
@@ -337,6 +538,19 @@ def evaluate_classification_models(X, y):
         "MLP Classifier": make_pipeline(
             StandardScaler(),
             MLPClassifier(hidden_layer_sizes=(32, 16), max_iter=1200, random_state=42),
+        ),
+        "Gradient Boosting": GradientBoostingClassifier(random_state=42),
+        "Hist Gradient Boosting": HistGradientBoostingClassifier(random_state=42),
+        "Tuned Random Forest": GridSearchCV(
+            RandomForestClassifier(random_state=42, class_weight="balanced"),
+            {
+                "n_estimators": [300],
+                "max_depth": [8, 14],
+                "min_samples_leaf": [3, 6],
+            },
+            cv=3,
+            scoring="accuracy",
+            n_jobs=1,
         ),
     }
 
@@ -374,7 +588,7 @@ def evaluate_regression_models(X, y):
         y_pred = candidate.predict(X_test)
         results[name] = {
             "mae": mean_absolute_error(y_test, y_pred),
-            "rmse": mean_squared_error(y_test, y_pred, squared=False),
+            "rmse": mean_squared_error(y_test, y_pred) ** 0.5,
             "r2": r2_score(y_test, y_pred),
         }
     return results
@@ -453,8 +667,9 @@ def extract_feature_importance(model, feature_names):
 
 def train_model():
     players, matches, rankings, names = load_data()
-    team_features = build_team_features(players, rankings)
-    model_dataset = build_match_dataset(matches, names, team_features)
+    form_history = build_form_history(matches, names)
+    team_features = build_team_features(players, rankings, form_history)
+    model_dataset = build_match_dataset(matches, names, team_features, rankings, form_history)
 
     X = model_dataset[FEATURES]
     trained_models, classification_results, best_model_name = evaluate_classification_models(
@@ -474,6 +689,10 @@ def train_model():
     tournament_success_dataset.to_csv(PROCESSED_DATA_DIR / "tournament_success_dataset.csv", index=False)
     joblib.dump(model, MODELS_DIR / "fifa_model.pkl")
     joblib.dump(team_features, MODELS_DIR / "team_features.pkl")
+    joblib.dump(
+        {name: trained_models[name] for name in SIMULATION_MODEL_NAMES if name in trained_models},
+        MODELS_DIR / "match_models.pkl",
+    )
 
     feature_importance_model = trained_models.get("Random Forest", model)
 
@@ -494,6 +713,7 @@ def train_model():
             "No possession, shots, shots-on-target, or fouls dataset is present in the local project folder.",
             "The requested world_cup_2018_squads.xlsx file is not present; player-strength features are derived from FIFA18 nationality-level player records instead of exact 2018 roster membership.",
             "Jordan has ranking data but no FIFA18 player rows, so median player-strength features are used.",
+            "Current/future predictions use each team's latest available rolling-form values from the local match history.",
         ],
     }
     joblib.dump(metrics, MODELS_DIR / "model_metrics.pkl")

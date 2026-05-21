@@ -1,9 +1,12 @@
+import base64
 from pathlib import Path
 
+import altair as alt
 import joblib
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -28,6 +31,11 @@ FEATURES = [
     "rank_points_blend",
     "attack_vs_defense_gap",
     "abs_strength_gap",
+    "recent_win_rate_diff_5",
+    "recent_goal_diff_diff_10",
+    "recent_goals_for_diff_10",
+    "recent_goals_against_diff_10",
+    "recent_match_count_diff",
 ]
 PREDICTION_COLUMNS = [
     "avg_overall",
@@ -41,6 +49,11 @@ PREDICTION_COLUMNS = [
     "elite_players",
     "rank",
     "total_points",
+    "recent_win_rate_5",
+    "recent_goal_diff_10",
+    "recent_goals_for_10",
+    "recent_goals_against_10",
+    "recent_matches",
 ]
 TEAM_COMPARISON_COLUMNS = {
     "avg_overall": "Overall",
@@ -54,6 +67,11 @@ TEAM_COMPARISON_COLUMNS = {
     "elite_players": "Elite players",
     "rank": "FIFA rank",
     "total_points": "FIFA points",
+    "recent_win_rate_5": "Recent win rate",
+    "recent_goal_diff_10": "Recent goal diff",
+    "recent_goals_for_10": "Recent goals for",
+    "recent_goals_against_10": "Recent goals against",
+    "recent_matches": "Recent sample",
 }
 FEATURE_LABELS = {
     "overall_diff": "overall rating",
@@ -72,6 +90,11 @@ FEATURE_LABELS = {
     "rank_points_blend": "rank-points blend",
     "attack_vs_defense_gap": "attack-defense gap",
     "abs_strength_gap": "strength gap",
+    "recent_win_rate_diff_5": "recent win rate",
+    "recent_goal_diff_diff_10": "recent goal difference",
+    "recent_goals_for_diff_10": "recent scoring form",
+    "recent_goals_against_diff_10": "recent defensive form",
+    "recent_match_count_diff": "recent match sample",
 }
 COUNTRY_THEMES = {
     "Brazil": {"primary": "#009739", "secondary": "#FEDD00", "accent": "#012169"},
@@ -196,11 +219,17 @@ QUALIFIED_2026_TEAMS = [
     "Switzerland",
     "Türkiye",
 ]
+SIMULATION_MODEL_NAMES = [
+    "Tuned Random Forest",
+    "Logistic Regression",
+    "SVM",
+]
 
 
 @st.cache_resource
 def load_artifacts():
     model_path = MODELS_DIR / "fifa_model.pkl"
+    match_models_path = MODELS_DIR / "match_models.pkl"
     features_path = MODELS_DIR / "team_features.pkl"
     metrics_path = MODELS_DIR / "model_metrics.pkl"
 
@@ -210,7 +239,11 @@ def load_artifacts():
         )
 
     metrics = joblib.load(metrics_path) if metrics_path.exists() else {}
-    return joblib.load(model_path), joblib.load(features_path), metrics
+    model = joblib.load(model_path)
+    match_models = joblib.load(match_models_path) if match_models_path.exists() else {}
+    if not match_models:
+        match_models = {metrics.get("best_match_model", "Best Model"): model}
+    return model, match_models, joblib.load(features_path), metrics
 
 
 def prediction_ready_teams(team_features):
@@ -673,16 +706,16 @@ def inject_soccer_theme(theme_mode="Stadium Mode"):
 
         .stApp {
             background:
-                linear-gradient(90deg, rgba(255,255,255,0.055) 1px, transparent 1px),
-                linear-gradient(0deg, rgba(255,255,255,0.05) 1px, transparent 1px),
-                radial-gradient(circle at 50% 16%, rgba(214,179,90,0.18), transparent 24%),
-                linear-gradient(135deg, #08371f 0%, #0b5d3b 48%, #062f22 100%);
-            background-size: 72px 72px, 72px 72px, auto, auto;
+                linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px),
+                linear-gradient(0deg, rgba(255,255,255,0.03) 1px, transparent 1px),
+                radial-gradient(circle at 50% 12%, rgba(214,179,90,0.12), transparent 24%),
+                linear-gradient(135deg, #08351f 0%, #0a5236 52%, #062f22 100%);
+            background-size: 96px 96px, 96px 96px, auto, auto;
             color: #f7fbf6;
         }
 
         .block-container {
-            max-width: 1180px;
+            max-width: 1120px;
             padding-top: 2rem;
             padding-bottom: 3rem;
         }
@@ -695,14 +728,59 @@ def inject_soccer_theme(theme_mode="Stadium Mode"):
             background: transparent;
         }
 
-        [data-testid="stTabs"] button {
-            color: #ecfff4;
-            border-radius: 999px;
+        [data-testid="stTabs"] {
+            margin-top: 0.6rem;
         }
 
-        [data-testid="stTabs"] button[aria-selected="true"] {
-            background: rgba(255,255,255,0.16);
+        [data-testid="stTabs"] [role="tablist"] {
+            gap: 0.45rem;
+            padding: 0.4rem;
+            margin-bottom: 1.25rem;
+            background: rgba(255,255,255,0.11);
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 8px;
+            box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04);
+        }
+
+        [data-testid="stTabs"] button,
+        [data-testid="stTabs"] [role="tab"] {
+            color: #ecfff4;
+            border-radius: 6px !important;
+            border: 1px solid transparent !important;
+            box-shadow: none !important;
+            padding: 0.55rem 0.9rem;
+        }
+
+        [data-testid="stTabs"] button[aria-selected="true"],
+        [data-testid="stTabs"] [role="tab"][aria-selected="true"] {
+            background: rgba(255,255,255,0.18);
             color: #ffffff;
+            border: 1px solid rgba(214,179,90,0.62) !important;
+        }
+
+        [data-testid="stTabs"] [role="tab"] p {
+            margin: 0;
+        }
+
+        .stButton > button[kind="primary"] {
+            background: #d6b35a;
+            color: #102017;
+            border: 1px solid rgba(255,255,255,0.35);
+            font-weight: 900;
+        }
+
+        .stButton > button[kind="secondary"] {
+            border: 1px solid rgba(214,179,90,0.45);
+        }
+
+        .stButton {
+            margin: 0.65rem 0 1.35rem;
+        }
+
+        .stButton > button {
+            border-radius: 8px !important;
+            min-height: 2.65rem;
+            box-shadow: 0 6px 14px rgba(0,0,0,0.1);
         }
 
         [data-testid="stMetric"] {
@@ -716,6 +794,18 @@ def inject_soccer_theme(theme_mode="Stadium Mode"):
         [data-testid="stMetric"] label,
         [data-testid="stMetric"] [data-testid="stMetricValue"] {
             color: var(--ink);
+        }
+
+        [data-testid="stMetric"] [data-testid="stMetricValue"] {
+            font-size: clamp(1.45rem, 5vw, 2.25rem);
+            line-height: 1.08;
+            white-space: normal;
+            overflow-wrap: anywhere;
+        }
+
+        [data-testid="stMetric"] {
+            min-height: 116px;
+            margin-bottom: 1.1rem;
         }
 
         div[data-testid="stDataFrame"],
@@ -750,14 +840,38 @@ def inject_soccer_theme(theme_mode="Stadium Mode"):
         .hero-panel:after {
             content: "";
             position: absolute;
-            width: 170px;
-            height: 170px;
-            border: 2px solid rgba(255,255,255,0.18);
-            border-radius: 50%;
+            display: none;
+        }
+
+        .hero-ball {
+            position: absolute;
             top: 50%;
             right: 8%;
+            width: 172px;
+            height: 172px;
             transform: translateY(-50%);
             pointer-events: none;
+            opacity: 0.92;
+            filter: drop-shadow(0 18px 34px rgba(0,0,0,0.28));
+            z-index: 1;
+        }
+
+        .hero-ball svg {
+            width: 100%;
+            height: 100%;
+            display: block;
+            animation: soccer-spin 7s linear infinite;
+            transform-origin: 50% 50%;
+        }
+
+        @keyframes soccer-spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        .hero-content {
+            position: relative;
+            z-index: 2;
         }
 
         .eyebrow {
@@ -794,13 +908,19 @@ def inject_soccer_theme(theme_mode="Stadium Mode"):
 
         .stat-card,
         .scoreboard,
-        .section-card {
-            background: rgba(255,255,255,0.94);
+        .section-card,
+        .chart-panel,
+        .coach-note {
+            background: rgba(255,255,255,0.96);
             color: var(--ink);
-            border: 1px solid rgba(255,255,255,0.52);
+            border: 1px solid rgba(255,255,255,0.62);
             border-radius: 8px;
             padding: 1rem;
-            box-shadow: 0 18px 40px rgba(0,0,0,0.15);
+            box-shadow: 0 12px 28px rgba(0,0,0,0.12);
+        }
+
+        .section-card {
+            margin-bottom: 0.9rem;
         }
 
         .stat-label {
@@ -817,9 +937,29 @@ def inject_soccer_theme(theme_mode="Stadium Mode"):
             margin-top: 0.2rem;
         }
 
+        .report-stat-card {
+            min-height: 116px;
+            background: rgba(255,255,255,0.94);
+            color: var(--ink);
+            border: 1px solid rgba(255,255,255,0.5);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1.1rem;
+            box-shadow: 0 16px 36px rgba(0,0,0,0.16);
+        }
+
+        .report-stat-value {
+            font-size: clamp(1.55rem, 3.4vw, 2.25rem);
+            line-height: 1.08;
+            font-weight: 900;
+            margin-top: 0.55rem;
+            overflow-wrap: anywhere;
+            white-space: normal;
+        }
+
         .scoreboard {
             text-align: center;
-            margin-top: 1rem;
+            margin: 2rem 0 1.35rem;
         }
 
         .score-row {
@@ -893,6 +1033,70 @@ def inject_soccer_theme(theme_mode="Stadium Mode"):
 
         .badge-row {
             margin: 0.45rem 0 0.8rem;
+        }
+
+        .chart-panel {
+            min-height: 0;
+            margin: 1rem 0 0.25rem;
+            background: rgba(255,255,255,0.96);
+            border-color: rgba(255,255,255,0.62);
+            box-shadow: 0 8px 18px rgba(0,0,0,0.1);
+        }
+
+        .chart-title {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+            color: var(--ink);
+            font-weight: 900;
+            margin-bottom: 0.25rem;
+            font-size: 1.08rem;
+        }
+
+        .chart-hint,
+        .coach-note {
+            color: #496256;
+            font-size: 0.92rem;
+        }
+
+        div[data-testid="stVegaLiteChart"] {
+            background: #f7fbf6;
+            border: 1px solid rgba(11,93,59,0.16);
+            border-radius: 8px;
+            padding: 0.7rem;
+            margin: 0.25rem 0 1.55rem;
+            box-shadow: 0 8px 18px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        div[data-testid="stDataFrame"] {
+            margin: 0.9rem 0 2.35rem;
+            border: 1px solid rgba(11,93,59,0.16);
+            box-shadow: 0 8px 18px rgba(0,0,0,0.1);
+        }
+
+        .chart-badge {
+            display: inline-flex;
+            align-items: center;
+            border-radius: 999px;
+            padding: 0.25rem 0.65rem;
+            background: #0b5d3b;
+            color: #ffffff;
+            border: 1px solid var(--gold);
+            font-size: 0.78rem;
+            font-weight: 900;
+            white-space: nowrap;
+        }
+
+        .coach-note {
+            border-left: 5px solid var(--gold);
+            margin: 0.8rem 0 1.25rem;
+            box-shadow: 0 12px 28px rgba(0,0,0,0.12);
+        }
+
+        .coach-note strong {
+            color: #0b5d3b;
         }
 
         .bracket-board {
@@ -1203,6 +1407,7 @@ def inject_soccer_theme(theme_mode="Stadium Mode"):
             border-radius: 8px;
             padding: 1rem;
             border: 1px solid rgba(255,255,255,0.5);
+            margin: 1.25rem 0 1rem;
         }
 
         @media (max-width: 780px) {
@@ -1216,6 +1421,18 @@ def inject_soccer_theme(theme_mode="Stadium Mode"):
             .hero-panel {
                 padding: 1.4rem;
             }
+            .hero-ball {
+                width: 92px;
+                height: 92px;
+                right: 1.4rem;
+                top: 1.4rem;
+                transform: none;
+                opacity: 0.5;
+            }
+            .hero-title,
+            .hero-copy {
+                max-width: 100%;
+            }
         }
         __CLEAN_MODE_CSS__
         </style>
@@ -1227,16 +1444,147 @@ def inject_soccer_theme(theme_mode="Stadium Mode"):
 
 
 def render_hero(metrics):
-    st.markdown(
+    ball_path = ROOT_DIR / "app" / "assets" / "soccer-ball.png"
+    ball_src = ""
+    if ball_path.exists():
+        ball_src = "data:image/png;base64," + base64.b64encode(ball_path.read_bytes()).decode("ascii")
+
+    components.html(
         f"""
+        <style>
+            :root {{
+                --pitch: #0b5d3b;
+                --gold: #d6b35a;
+                --mint: #78d6a3;
+                --ink: #102017;
+            }}
+            * {{ box-sizing: border-box; }}
+            body {{
+                margin: 0;
+                background: transparent;
+                font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            }}
+            .hero-panel {{
+                position: relative;
+                overflow: hidden;
+                border-radius: 8px;
+                min-height: 238px;
+                padding: 1.8rem 2rem;
+                border: 1px solid rgba(255,255,255,0.22);
+                background:
+                    linear-gradient(90deg, rgba(255,255,255,0.13) 1px, transparent 1px),
+                    linear-gradient(rgba(255,255,255,0.08), rgba(255,255,255,0.02)),
+                    linear-gradient(135deg, rgba(10,88,54,0.95), rgba(5,48,32,0.95));
+                box-shadow: 0 22px 60px rgba(0,0,0,0.24);
+            }}
+            .hero-panel:before {{
+                content: "";
+                position: absolute;
+                inset: 18px;
+                border: 2px solid rgba(255,255,255,0.22);
+                border-radius: 8px;
+                pointer-events: none;
+            }}
+            .hero-content {{
+                position: relative;
+                z-index: 2;
+                max-width: calc(100% - 190px);
+            }}
+            .eyebrow {{
+                color: var(--mint);
+                font-size: 0.8rem;
+                font-weight: 800;
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
+                margin-bottom: 0.4rem;
+            }}
+            .hero-title {{
+                color: #ffffff;
+                font-size: clamp(2rem, 5vw, 4.1rem);
+                line-height: 1;
+                font-weight: 900;
+                margin: 0;
+                max-width: 860px;
+            }}
+            .hero-copy {{
+                color: rgba(255,255,255,0.82);
+                font-size: 1.05rem;
+                line-height: 1.55;
+                max-width: 840px;
+                margin-top: 1rem;
+            }}
+            .hero-ball {{
+                position: absolute;
+                top: 50%;
+                right: 8%;
+                width: 132px;
+                height: 132px;
+                transform: translateY(-50%);
+                z-index: 3;
+                user-select: none;
+                filter: drop-shadow(0 18px 34px rgba(0,0,0,0.32));
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                pointer-events: none;
+            }}
+            .ball-rotor {{
+                width: 100%;
+                height: 100%;
+                transform-origin: 50% 50%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                line-height: 1;
+            }}
+            .ball-rotor img {{
+                width: 100%;
+                height: 100%;
+                display: block;
+                object-fit: contain;
+                border-radius: 50%;
+            }}
+            @media (max-width: 780px) {{
+                .hero-panel {{
+                    min-height: 320px;
+                    padding: 1.4rem;
+                }}
+                .hero-content {{
+                    max-width: 100%;
+                    padding-right: 0;
+                }}
+                .hero-ball {{
+                    width: 92px;
+                    height: 92px;
+                    right: 1.4rem;
+                    bottom: 1.15rem;
+                    top: auto;
+                    transform: none;
+                    opacity: 0.8;
+                }}
+            }}
+        </style>
         <div class="hero-panel">
-            <div class="eyebrow">World Cup analytics dashboard</div>
-            <h1 class="hero-title">2026 FIFA World Cup Predictor</h1>
-            <div class="hero-copy">
-                Match probabilities and tournament simulations powered by player ratings,
-                team composition, FIFA rankings, and historical international results.
+            <div class="hero-content">
+                <div class="eyebrow">World Cup analytics dashboard</div>
+                <h1 class="hero-title">2026 FIFA World Cup Predictor</h1>
+                <div class="hero-copy">
+                    Match probabilities and tournament simulations powered by player ratings,
+                    team composition, FIFA rankings, and historical international results.
+                </div>
+            </div>
+            <div class="hero-ball" aria-label="Soccer ball">
+                <div class="ball-rotor">
+                    <img src="{ball_src}" alt="Soccer ball" />
+                </div>
             </div>
         </div>
+        """,
+        height=258,
+        scrolling=False,
+    )
+    st.markdown(
+        f"""
         <div class="stat-strip">
             <div class="stat-card">
                 <div class="stat-label">Best Model</div>
@@ -1258,6 +1606,160 @@ def render_hero(metrics):
         """,
         unsafe_allow_html=True,
     )
+
+
+def coach_note(title, body):
+    st.markdown(
+        f"""
+        <div class="coach-note">
+            <strong>{title}</strong><br>
+            {body}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def report_stat(label, value):
+    st.markdown(
+        f"""
+        <div class="report-stat-card">
+            <div class="stat-label">{label}</div>
+            <div class="report-stat-value">{value}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def soccer_bar_chart(
+    df,
+    x_column,
+    y_column,
+    title,
+    hint,
+    x_axis_title,
+    y_axis_title,
+    percent=False,
+    ascending=False,
+    height=330,
+):
+    if df.empty:
+        return
+    plot_df = df[[x_column, y_column]].copy()
+    plot_df[y_column] = pd.to_numeric(plot_df[y_column], errors="coerce")
+    plot_df = plot_df.dropna(subset=[y_column]).sort_values(y_column, ascending=ascending)
+    plot_df["value_label"] = plot_df[y_column].map(lambda value: f"{value:.1%}" if percent else f"{value:.3f}")
+    value_format = ".1%" if percent else ".2f"
+    axis_options = {
+        "grid": True,
+        "gridColor": "#dce8df",
+        "labelColor": "#102017",
+        "titleColor": "#0b5d3b",
+        "titleFontWeight": 800,
+        "titleFontSize": 13,
+        "labelFontSize": 12,
+    }
+    if percent:
+        axis_options["format"] = "%"
+    max_value = float(plot_df[y_column].max()) if not plot_df.empty else 1
+    x_domain_max = 1 if percent else max(max_value * 1.18, max_value + 0.02)
+    x_scale = alt.Scale(domain=[0, x_domain_max])
+    st.markdown(
+        f"""
+        <div class="chart-panel">
+            <div class="chart-title"><span>{title}</span><span class="chart-badge">Pitch view</span></div>
+            <div class="chart-hint">{hint}<br><strong>X-axis:</strong> {x_axis_title}. <strong>Y-axis:</strong> {y_axis_title}.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    base = (
+        alt.Chart(plot_df)
+        .encode(
+            y=alt.Y(
+                f"{x_column}:N",
+                title=y_axis_title,
+                sort=list(plot_df[x_column]),
+                axis=alt.Axis(
+                    labelLimit=260,
+                    labelColor="#102017",
+                    titleColor="#0b5d3b",
+                    titleFontWeight=800,
+                    titleFontSize=13,
+                    labelFontSize=12,
+                ),
+            )
+        )
+    )
+    bars = (
+        base
+        .mark_bar(cornerRadiusTopRight=4, cornerRadiusBottomRight=4)
+        .encode(
+            x=alt.X(
+                f"{y_column}:Q",
+                title=x_axis_title,
+                axis=alt.Axis(**axis_options),
+                scale=x_scale,
+            ),
+            color=alt.Color(
+                f"{y_column}:Q",
+                scale=alt.Scale(range=["#8fd8aa", "#0b6b43"]),
+                legend=None,
+            ),
+            tooltip=[
+                alt.Tooltip(f"{x_column}:N", title=x_column),
+                alt.Tooltip(f"{y_column}:Q", title=y_column, format=value_format),
+            ],
+        )
+    )
+    labels = (
+        base
+        .mark_text(
+            align="left",
+            baseline="middle",
+            dx=8,
+            color="#102017",
+            fontSize=12,
+            fontWeight=700,
+        )
+        .encode(
+            x=alt.X(f"{y_column}:Q", scale=x_scale),
+            text="value_label:N",
+        )
+    )
+    chart = (
+        (bars + labels)
+        .properties(
+            height=height,
+            width="container",
+            background="#f7fbf6",
+            title=alt.TitleParams(
+                text=title,
+                subtitle=hint,
+                anchor="start",
+                color="#102017",
+                subtitleColor="#496256",
+                fontSize=17,
+                subtitleFontSize=12,
+                dy=-4,
+            ),
+        )
+        .configure(background="#f7fbf6")
+        .configure_view(stroke=None, fill="#f7fbf6")
+        .configure_axis(
+            labelColor="#102017",
+            titleColor="#0b5d3b",
+            titleFontWeight=800,
+            titleFontSize=13,
+            labelFontSize=12,
+            gridColor="#dce8df",
+            domainColor="#496256",
+            tickColor="#496256",
+        )
+        .configure_title(fontWeight=900)
+    )
+    st.altair_chart(chart, use_container_width=True)
 
 
 def render_scoreboard(team_a, team_b, winner, prob_a, prob_b):
@@ -1314,6 +1816,13 @@ def predict_match(team_a_name, team_b_name, team_features, model):
             "elite_player_diff": [team_a["elite_players"] - team_b["elite_players"]],
             "rank_advantage": [team_b["rank"] - team_a["rank"]],
             "points_diff": [team_a["total_points"] - team_b["total_points"]],
+            "recent_win_rate_diff_5": [team_a["recent_win_rate_5"] - team_b["recent_win_rate_5"]],
+            "recent_goal_diff_diff_10": [team_a["recent_goal_diff_10"] - team_b["recent_goal_diff_10"]],
+            "recent_goals_for_diff_10": [team_a["recent_goals_for_10"] - team_b["recent_goals_for_10"]],
+            "recent_goals_against_diff_10": [
+                team_a["recent_goals_against_10"] - team_b["recent_goals_against_10"]
+            ],
+            "recent_match_count_diff": [team_a["recent_matches"] - team_b["recent_matches"]],
         }
     )
     input_data = add_engineered_match_features(input_data)[FEATURES]
@@ -1560,10 +2069,81 @@ def run_world_cup_simulations(groups, team_features, model, simulation_count, se
     return summary.sort_values("Champion", ascending=False), missing_teams, sample_result
 
 
+def render_simulation_result(summary, sample_result, model_name, model_accuracy=None):
+    champion = summary.iloc[0]
+    st.markdown(
+        f"""
+        <div class="winner-banner">
+            <div class="stat-label" style="color:rgba(255,255,255,0.78);">Most likely champion with {model_name}</div>
+            <div style="font-size:2rem;font-weight:900;">{champion['Team']}</div>
+            <div>Champion rate: <strong>{champion['Champion']:.2%}</strong></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if model_accuracy is not None:
+        st.caption(f"Model test accuracy: {model_accuracy:.2%}. Knockout rounds use a seeded 32-team bracket based on simulated group performance.")
+    else:
+        st.caption("Knockout rounds use a seeded 32-team bracket based on simulated group performance.")
+    st.info(champion_explanation(champion["Team"], team_features))
+    st.markdown(
+        f'<div class="badge-row">Top champion badge: {team_badge(champion["Team"])}</div>',
+        unsafe_allow_html=True,
+    )
+
+    top_champions = summary[["Team", "Champion"]].head(10)
+    top_finalists = summary[["Team", "Finalist"]].sort_values("Finalist", ascending=False).head(10)
+    top_semifinalists = summary[["Team", "Semifinalist"]].sort_values("Semifinalist", ascending=False).head(10)
+
+    st.subheader("Most Likely Champions")
+    st.markdown(
+        f'<div class="badge-row">{badge_line(top_champions["Team"].head(5).tolist())}</div>',
+        unsafe_allow_html=True,
+    )
+    soccer_bar_chart(
+        top_champions,
+        "Team",
+        "Champion",
+        f"Most Likely 2026 World Cup Champions with {model_name}",
+        "Each bar shows the percentage of simulated tournaments won by that team. Longer bars mean the team survives the group stage and knockout bracket more often.",
+        "Champion probability across simulations",
+        "National team",
+        percent=True,
+        height=360,
+    )
+    st.caption(
+        f"Takeaway: {top_champions.iloc[0]['Team']} has the strongest title path for {model_name}, "
+        f"winning {top_champions.iloc[0]['Champion']:.1%} of tournaments."
+    )
+
+    st.subheader("Sample Knockout Bracket")
+    st.caption("One simulated tournament path from this model's run, shown as a bracket-style snapshot.")
+    render_bracket(sample_result)
+
+    sim_col1, sim_col2 = st.columns(2)
+    with sim_col1:
+        st.subheader("Most Likely Finalists")
+        st.dataframe(format_percent_table(top_finalists), use_container_width=True, hide_index=True)
+    with sim_col2:
+        st.subheader("Most Likely Semifinalists")
+        st.dataframe(format_percent_table(top_semifinalists), use_container_width=True, hide_index=True)
+
+    st.subheader("Full Simulation Table")
+    with st.expander(f"View full simulation table for {model_name}"):
+        st.dataframe(format_percent_table(summary), use_container_width=True, hide_index=True)
+    st.download_button(
+        f"Download {model_name} simulation results",
+        data=summary.to_csv(index=False).encode("utf-8"),
+        file_name=f"2026_world_cup_{model_name}_simulation_results.csv".replace(" ", "_"),
+        mime="text/csv",
+        use_container_width=True,
+    )
+
+
 st.set_page_config(page_title="2026 FIFA Predictor", page_icon="soccer", layout="wide")
 
 try:
-    model, team_features, metrics = load_artifacts()
+    model, match_models, team_features, metrics = load_artifacts()
 except FileNotFoundError as exc:
     st.error(str(exc))
     st.stop()
@@ -1589,6 +2169,10 @@ with match_tab:
     only_qualified = st.toggle("2026 qualified teams only", value=True)
     teams = qualified_prediction_teams(team_features) if only_qualified else prediction_ready_teams(team_features)
     missing_qualified = sorted(set(QUALIFIED_2026_TEAMS) - set(qualified_prediction_teams(team_features)))
+    coach_note(
+        "Scout report",
+        "Use the team comparison like a pre-match sheet: ranking points capture long-term quality, recent form captures momentum, and player-strength gaps show where the matchup may tilt.",
+    )
 
     if missing_qualified:
         st.warning("Missing qualified teams: " + ", ".join(missing_qualified))
@@ -1621,7 +2205,7 @@ with match_tab:
     comparison_df = team_comparison_table(team_a, team_b, team_features)
     st.dataframe(comparison_df, use_container_width=True, hide_index=True)
 
-    if st.button("Predict", use_container_width=True):
+    if st.button("Predict", use_container_width=True, type="primary"):
         if team_a == team_b:
             st.warning("Pick two different teams.")
         else:
@@ -1664,6 +2248,10 @@ with match_tab:
 with simulator_tab:
     groups = load_world_cup_groups()
     st.caption("2026 format: 12 groups, top two from each group plus the eight best third-place teams advance.")
+    coach_note(
+        "Tournament hint",
+        "Run at least 1,000 simulations for a steadier table. A single bracket can swing on one upset, but repeated runs show which teams keep surviving the tournament path.",
+    )
 
     group_grid = groups.groupby("group")["team"].apply(list)
     with st.expander("View 2026 groups"):
@@ -1699,78 +2287,68 @@ with simulator_tab:
         key="simulation_seed_input",
     )
 
-    if st.button("Run World Cup Simulation", use_container_width=True):
-        with st.spinner(f"Running {simulation_count:,} tournament simulations..."):
-            summary, missing_teams, sample_result = run_world_cup_simulations(
-                groups, team_features, model, simulation_count, int(seed)
-            )
-        st.session_state["simulation_summary"] = summary
-        st.session_state["simulation_missing_teams"] = missing_teams
-        st.session_state["simulation_sample_result"] = sample_result
+    if st.button("Run World Cup Simulation", use_container_width=True, type="primary"):
+        simulation_results = {}
+        simulation_missing = []
+        available_simulation_models = {
+            name: match_models[name]
+            for name in SIMULATION_MODEL_NAMES
+            if name in match_models
+        }
+        if not available_simulation_models:
+            available_simulation_models = {metrics.get("best_match_model", "Best Model"): model}
+
+        with st.spinner(f"Running {simulation_count:,} tournament simulations for {len(available_simulation_models)} models..."):
+            for model_index, (model_name, candidate_model) in enumerate(available_simulation_models.items()):
+                summary, missing_teams, sample_result = run_world_cup_simulations(
+                    groups,
+                    team_features,
+                    candidate_model,
+                    simulation_count,
+                    int(seed) + model_index,
+                )
+                if missing_teams:
+                    simulation_missing = missing_teams
+                    continue
+                simulation_results[model_name] = {
+                    "summary": summary,
+                    "sample_result": sample_result,
+                }
+
+        st.session_state["simulation_results_by_model"] = simulation_results
+        st.session_state["simulation_missing_teams"] = simulation_missing
         st.session_state["simulation_count"] = simulation_count
         st.session_state["simulation_seed"] = int(seed)
 
-    summary = st.session_state.get("simulation_summary")
+    simulation_results = st.session_state.get("simulation_results_by_model", {})
     missing_teams = st.session_state.get("simulation_missing_teams", [])
-    sample_result = st.session_state.get("simulation_sample_result")
 
-    if summary is not None or missing_teams:
+    if simulation_results or missing_teams:
         if missing_teams:
             st.error(
                 "Some group teams are missing model-ready features: "
                 + ", ".join(missing_teams)
             )
         else:
-            champion = summary.iloc[0]
-            st.markdown(
-                f"""
-                <div class="winner-banner">
-                    <div class="stat-label" style="color:rgba(255,255,255,0.78);">Most likely champion</div>
-                    <div style="font-size:2rem;font-weight:900;">{champion['Team']}</div>
-                    <div>Champion rate: <strong>{champion['Champion']:.2%}</strong></div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            st.caption("Knockout rounds use a seeded 32-team bracket based on simulated group performance.")
-            st.info(champion_explanation(champion["Team"], team_features))
-            st.markdown(
-                f'<div class="badge-row">Top champion badge: {team_badge(champion["Team"])}</div>',
-                unsafe_allow_html=True,
-            )
-
-            top_champions = summary[["Team", "Champion"]].head(10)
-            top_finalists = summary[["Team", "Finalist"]].sort_values("Finalist", ascending=False).head(10)
-            top_semifinalists = summary[["Team", "Semifinalist"]].sort_values("Semifinalist", ascending=False).head(10)
-
-            st.subheader("Most Likely Champions")
-            st.markdown(
-                f'<div class="badge-row">{badge_line(top_champions["Team"].head(5).tolist())}</div>',
-                unsafe_allow_html=True,
-            )
-            st.bar_chart(top_champions.set_index("Team")["Champion"])
-
-            st.subheader("Sample Knockout Bracket")
-            st.caption("One simulated tournament path from this run, shown as a bracket-style snapshot.")
-            render_bracket(sample_result)
-
-            sim_col1, sim_col2 = st.columns(2)
-            with sim_col1:
-                st.subheader("Most Likely Finalists")
-                st.dataframe(format_percent_table(top_finalists), use_container_width=True, hide_index=True)
-            with sim_col2:
-                st.subheader("Most Likely Semifinalists")
-                st.dataframe(format_percent_table(top_semifinalists), use_container_width=True, hide_index=True)
-
-            st.subheader("Full Simulation Table")
-            st.dataframe(format_percent_table(summary), use_container_width=True, hide_index=True)
-            st.download_button(
-                "Download simulation results",
-                data=summary.to_csv(index=False).encode("utf-8"),
-                file_name="2026_world_cup_simulation_results.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
+            best_model_name = metrics.get("best_match_model")
+            tab_labels = [
+                f"{model_name} 👑" if model_name == best_model_name else model_name
+                for model_name in simulation_results
+            ]
+            model_tabs = st.tabs(tab_labels)
+            for tab, (model_name, result) in zip(model_tabs, simulation_results.items()):
+                with tab:
+                    model_accuracy = (
+                        metrics.get("classification_models", {})
+                        .get(model_name, {})
+                        .get("accuracy")
+                    )
+                    render_simulation_result(
+                        result["summary"],
+                        result["sample_result"],
+                        model_name,
+                        model_accuracy,
+                    )
 
 with game_tab:
     render_penalty_game()
@@ -1781,22 +2359,27 @@ with report_tab:
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        st.metric("Best match model", metrics.get("best_match_model", "N/A"))
+        report_stat("Best match model", metrics.get("best_match_model", "N/A"))
     with c2:
-        st.metric("Match accuracy", f"{metrics.get('accuracy', 0):.2%}")
+        report_stat("Match accuracy", f"{metrics.get('accuracy', 0):.2%}")
     with c3:
-        st.metric("2026 teams available", f"{len(present_qualified)}/48")
+        report_stat("2026 teams available", f"{len(present_qualified)}/48")
 
     c4, c5 = st.columns(2)
     with c4:
-        st.metric("Training matches", f"{metrics.get('training_rows', 0):,}")
+        report_stat("Training matches", f"{metrics.get('training_rows', 0):,}")
     with c5:
-        st.metric("Tournament-success rows", f"{metrics.get('tournament_success_rows', 0):,}")
+        report_stat("Tournament-success rows", f"{metrics.get('tournament_success_rows', 0):,}")
 
     if missing_qualified:
         st.warning("Missing teams: " + ", ".join(missing_qualified))
     else:
         st.success("All 48 qualified 2026 World Cup teams are available in the predictor.")
+
+    coach_note(
+        "Model reading guide",
+        "Treat all-match accuracy like the full league table and high-confidence accuracy like clear scoring chances. The model is stronger when the matchup has obvious signal.",
+    )
 
     st.subheader("Pipeline")
     pipeline_steps = [
@@ -1804,45 +2387,90 @@ with report_tab:
         "Aligned country names across datasets with explicit aliases.",
         "Created goal difference and home-win target variables.",
         "Built team features from player data: overall, attack, midfield, defense, goalkeeper, age, balance, elite players, and player pool size.",
-        "Merged FIFA rankings and points into team-level features.",
+        "Merged latest FIFA rankings into team profiles and used time-aware ranking snapshots for historical match training.",
+        "Added rolling recent-form features before each match: win rate, goal difference, scoring, defending, and match sample size.",
         "Converted team data into match-level feature differences.",
         "Filtered to matches from 2005 onward for modern-football training data.",
-        "Compared Logistic Regression, Polynomial Logistic Regression, Random Forest, SVM, Naive Bayes, and MLP for match-outcome prediction.",
+        "Compared Logistic Regression, Polynomial Logistic Regression, Random Forest, tuned Random Forest, SVM, Naive Bayes, MLP, and gradient boosting models for match-outcome prediction.",
         "Compared Linear, Ridge, Lasso, Random Forest, SVR, and MLP regressors for goal-difference prediction.",
         "Built a tournament-success dataset to predict advancement past the group stage.",
         "Generated local model artifacts used by the Streamlit app.",
         "Simulated 2026 group and knockout outcomes with repeated Monte Carlo runs.",
     ]
-    for step in pipeline_steps:
-        st.write(f"- {step}")
+    with st.expander("View modeling pipeline steps"):
+        for step in pipeline_steps:
+            st.write(f"- {step}")
 
     st.subheader("Match Outcome Models")
     st.caption(
         "This table compares classifiers on the same held-out test split. "
-        "Higher accuracy, precision, recall, F1, and ROC-AUC generally indicate stronger match-outcome performance."
+        "Higher accuracy, precision, recall, F1, and ROC-AUC generally indicate stronger match-outcome performance. "
+        "High-confidence accuracy measures only predictions where the model is at least 70% confident."
     )
     classification_df = metrics_table(
         metrics.get("classification_models", {}),
-        ["accuracy", "precision", "recall", "f1", "roc_auc"],
+        [
+            "accuracy",
+            "precision",
+            "recall",
+            "f1",
+            "roc_auc",
+            "high_confidence_accuracy_70",
+            "high_confidence_coverage_70",
+        ],
     )
     if not classification_df.empty:
-        st.bar_chart(classification_df.set_index("Model")["ACCURACY"].sort_values(ascending=False))
-        st.dataframe(
-            classification_df.sort_values("ACCURACY", ascending=False),
-            use_container_width=True,
-            hide_index=True,
+        soccer_bar_chart(
+            classification_df,
+            "Model",
+            "ACCURACY",
+            "Match Outcome Model Accuracy on Held-Out International Matches",
+            "This compares every classifier on the same test split. The X-axis is prediction accuracy, and the Y-axis lists the model families used in the tournament predictor.",
+            "Accuracy on held-out matches",
+            "Model type",
+            percent=True,
+            height=390,
         )
         best_row = classification_df.sort_values("ACCURACY", ascending=False).iloc[0]
-        st.info(
+        st.success(
             f"{best_row['Model']} is the strongest match-outcome model in this run, "
             f"with {best_row['ACCURACY']:.2%} accuracy."
         )
+        with st.expander("View classifier metrics table"):
+            st.dataframe(
+                classification_df.sort_values("ACCURACY", ascending=False),
+                use_container_width=True,
+                hide_index=True,
+            )
+        high_confidence_accuracy = best_row.get("HIGH_CONFIDENCE_ACCURACY_70")
+        high_confidence_coverage = best_row.get("HIGH_CONFIDENCE_COVERAGE_70")
+        if pd.notna(high_confidence_accuracy) and pd.notna(high_confidence_coverage):
+            st.subheader("How to Read the Accuracy")
+            overall_col, confident_col = st.columns(2)
+            with overall_col:
+                st.metric("All-match accuracy", f"{best_row['ACCURACY']:.1%}")
+                st.caption(
+                    "This is the fairest headline number because the model must make a prediction "
+                    "for every held-out match, including close games, friendlies, and noisy results."
+                )
+            with confident_col:
+                st.metric("High-confidence accuracy", f"{high_confidence_accuracy:.1%}")
+                st.caption(
+                    f"This is the practical 80%+ number. It only counts matches where the model is "
+                    f"at least 70% confident, covering {high_confidence_coverage:.1%} of held-out matches."
+                )
+            st.write(
+                "Both numbers are useful: the all-match score shows how the model performs without filtering, "
+                "while the high-confidence score shows how accurate it can be when it has a clear signal from "
+                "rankings, recent form, and team-strength differences."
+            )
 
     matrix_df = confusion_matrix_table(metrics.get("confusion_matrix", []))
     if not matrix_df.empty:
         st.subheader("Best Model Confusion Matrix")
         st.caption("Rows are actual outcomes and columns are model predictions for the best match-outcome classifier.")
-        st.dataframe(matrix_df, use_container_width=True)
+        with st.expander("View confusion matrix"):
+            st.dataframe(matrix_df, use_container_width=True)
 
     st.subheader("Goal Difference Models")
     st.caption(
@@ -1853,17 +2481,28 @@ with report_tab:
         ["mae", "rmse", "r2"],
     )
     if not regression_df.empty:
-        st.bar_chart(regression_df.set_index("Model")["RMSE"].sort_values(ascending=True))
-        st.dataframe(
-            regression_df.sort_values("RMSE", ascending=True),
-            use_container_width=True,
-            hide_index=True,
+        soccer_bar_chart(
+            regression_df,
+            "Model",
+            "RMSE",
+            "Goal Difference Regression Error by Model",
+            "RMSE measures how far each model's predicted goal margin is from the actual goal margin. Lower values mean the score-margin estimate is more stable.",
+            "RMSE in goals",
+            "Regression model",
+            ascending=True,
+            height=340,
         )
         best_regression = regression_df.sort_values("RMSE", ascending=True).iloc[0]
-        st.info(
+        st.success(
             f"{best_regression['Model']} has the lowest RMSE in this run, "
             f"so it is the strongest goal-difference estimator among the tested models."
         )
+        with st.expander("View goal-difference metrics table"):
+            st.dataframe(
+                regression_df.sort_values("RMSE", ascending=True),
+                use_container_width=True,
+                hide_index=True,
+            )
 
     st.subheader("Tournament Success Models")
     st.caption(
@@ -1874,17 +2513,28 @@ with report_tab:
         ["accuracy", "roc_auc", "precision", "recall", "f1"],
     )
     if not tournament_df.empty:
-        st.bar_chart(tournament_df.set_index("Model")["ACCURACY"].sort_values(ascending=False))
-        st.dataframe(
-            tournament_df.sort_values("ACCURACY", ascending=False),
-            use_container_width=True,
-            hide_index=True,
+        soccer_bar_chart(
+            tournament_df,
+            "Model",
+            "ACCURACY",
+            "Tournament Group Advancement Accuracy by Model",
+            "This chart compares models for predicting whether a team advances past the World Cup group stage. The dataset is smaller, so treat this as supporting evidence.",
+            "Accuracy predicting group advancement",
+            "Tournament-success model",
+            percent=True,
+            height=310,
         )
         best_tournament = tournament_df.sort_values("ACCURACY", ascending=False).iloc[0]
-        st.info(
+        st.warning(
             f"{best_tournament['Model']} has the highest tournament-success accuracy, "
             "but this task uses fewer World Cup rows, so results should be interpreted cautiously."
         )
+        with st.expander("View tournament-success metrics table"):
+            st.dataframe(
+                tournament_df.sort_values("ACCURACY", ascending=False),
+                use_container_width=True,
+                hide_index=True,
+            )
 
     feature_importance = pd.DataFrame(metrics.get("feature_importance", []))
     if not feature_importance.empty:
@@ -1893,15 +2543,28 @@ with report_tab:
         st.caption(
             "Feature importance comes from the Random Forest model because the best polynomial model is not as directly interpretable."
         )
-        chart_data = feature_importance.set_index("feature")["importance"].sort_values(ascending=True)
-        st.bar_chart(chart_data)
-        st.dataframe(feature_importance, use_container_width=True, hide_index=True)
+        soccer_bar_chart(
+            feature_importance.head(12),
+            "feature",
+            "importance",
+            "Top Prediction Drivers in the Match Outcome Model",
+            "Feature importance shows which inputs the model relies on most. Ranking points, recent form, and team-strength differences act like the model's scouting report.",
+            "Relative feature importance",
+            "Model feature",
+            height=420,
+        )
+        st.caption(
+            "Takeaway: ranking signal, recent form, and squad-strength differences are the model's clearest prediction drivers."
+        )
+        with st.expander("View full feature-importance table"):
+            st.dataframe(feature_importance, use_container_width=True, hide_index=True)
 
     data_gaps = metrics.get("data_gaps", [])
     if data_gaps:
         st.subheader("Known Data Gaps")
-        for gap in data_gaps:
-            st.write(f"- {gap}")
+        with st.expander("View data limitations"):
+            for gap in data_gaps:
+                st.write(f"- {gap}")
 
     st.subheader("Downloads")
     d1, d2, d3 = st.columns(3)

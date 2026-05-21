@@ -40,18 +40,24 @@ raw datasets
 
 The current training pipeline builds:
 
-- Match outcome classifiers: Logistic Regression, Polynomial Logistic Regression, Random Forest, SVM, Naive Bayes, and MLP.
+- Match outcome classifiers: Logistic Regression, Polynomial Logistic Regression, Random Forest, tuned Random Forest, SVM, Naive Bayes, MLP, and gradient boosting.
 - Goal difference regressors: Linear Regression, Ridge, Lasso, Random Forest, SVR, and MLP.
 - Tournament success classifiers: Logistic Regression, Decision Tree, Random Forest, and MLP.
 - 2026 World Cup simulation using the trained match-outcome model probabilities.
 
 Current saved model summary:
 
-- Best match-outcome model: Polynomial Logistic Regression.
-- Match-outcome accuracy: approximately 72.7%.
-- Training matches: 4,951.
+- Best match-outcome model: Tuned Random Forest.
+- Match-outcome accuracy on all held-out matches: approximately 71.1%.
+- High-confidence accuracy at 70%+ model confidence: approximately 80.8% on about 51.6% of held-out matches.
+- Training matches: 4,940.
 - Tournament-success rows: 126.
 - 2026 teams available in the simulator: 48/48.
+
+Why report both accuracy numbers:
+
+- All-match accuracy is the honest baseline because every held-out match must receive a prediction, including close matchups and noisy friendlies.
+- High-confidence accuracy shows the model's best practical use case: when it is at least 70% confident, rankings, recent form, and team-strength gaps provide a clearer signal, reaching the 80% target on roughly half of held-out matches.
 
 ## Local Setup
 
