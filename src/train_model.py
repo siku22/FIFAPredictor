@@ -21,7 +21,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.naive_bayes import GaussianNB
 from sklearn.neural_network import MLPClassifier, MLPRegressor
 from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import PolynomialFeatures, StandardScaler
 from sklearn.svm import SVC, SVR
 from sklearn.tree import DecisionTreeClassifier
 
@@ -43,6 +43,11 @@ FEATURES = [
     "elite_player_diff",
     "rank_advantage",
     "points_diff",
+    "strength_diff",
+    "spine_diff",
+    "rank_points_blend",
+    "attack_vs_defense_gap",
+    "abs_strength_gap",
 ]
 
 PREDICTION_COLUMNS = [
@@ -57,6 +62,20 @@ PREDICTION_COLUMNS = [
     "elite_players",
     "rank",
     "total_points",
+]
+
+BASE_MATCH_FEATURES = [
+    "overall_diff",
+    "attack_diff",
+    "midfield_diff",
+    "defense_diff",
+    "goalkeeper_diff",
+    "age_diff",
+    "balance_diff",
+    "player_pool_diff",
+    "elite_player_diff",
+    "rank_advantage",
+    "points_diff",
 ]
 
 TEAM_NAME_ALIASES = {
@@ -257,6 +276,7 @@ def build_match_dataset(matches, names, team_features):
     compiled["elite_player_diff"] = compiled["home_elite_players"] - compiled["away_elite_players"]
     compiled["rank_advantage"] = compiled["away_rank"] - compiled["home_rank"]
     compiled["points_diff"] = compiled["home_total_points"] - compiled["away_total_points"]
+    compiled = add_engineered_match_features(compiled)
 
     final_dataset = compiled[
         [
@@ -273,6 +293,18 @@ def build_match_dataset(matches, names, team_features):
     ].dropna()
     final_dataset["date"] = pd.to_datetime(final_dataset["date"], errors="coerce")
     return final_dataset[final_dataset["date"].dt.year >= 2005].copy()
+
+
+def add_engineered_match_features(df):
+    df = df.copy()
+    df["strength_diff"] = df[
+        ["overall_diff", "attack_diff", "midfield_diff", "defense_diff", "goalkeeper_diff"]
+    ].mean(axis=1)
+    df["spine_diff"] = df[["midfield_diff", "defense_diff", "goalkeeper_diff"]].mean(axis=1)
+    df["rank_points_blend"] = (df["rank_advantage"] * 0.03) + (df["points_diff"] * 0.001)
+    df["attack_vs_defense_gap"] = df["attack_diff"] - df["defense_diff"]
+    df["abs_strength_gap"] = df["strength_diff"].abs()
+    return df
 
 
 def classification_metrics(y_test, y_pred, y_prob=None):
@@ -294,6 +326,11 @@ def evaluate_classification_models(X, y):
     models = {
         "Dummy Baseline": DummyClassifier(strategy="most_frequent"),
         "Logistic Regression": make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000)),
+        "Polynomial Logistic Regression": make_pipeline(
+            StandardScaler(),
+            PolynomialFeatures(degree=2, include_bias=False),
+            LogisticRegression(C=0.2, max_iter=4000),
+        ),
         "Random Forest": RandomForestClassifier(n_estimators=300, random_state=42, class_weight="balanced"),
         "SVM": make_pipeline(StandardScaler(), SVC(probability=True, random_state=42)),
         "Naive Bayes": GaussianNB(),
@@ -438,6 +475,8 @@ def train_model():
     joblib.dump(model, MODELS_DIR / "fifa_model.pkl")
     joblib.dump(team_features, MODELS_DIR / "team_features.pkl")
 
+    feature_importance_model = trained_models.get("Random Forest", model)
+
     metrics = {
         "best_match_model": best_model_name,
         "accuracy": classification_results[best_model_name]["accuracy"],
@@ -446,12 +485,14 @@ def train_model():
         "classification_models": classification_results,
         "regression_models": regression_results,
         "tournament_success_models": tournament_success_results,
-        "feature_importance": extract_feature_importance(model, FEATURES),
+        "feature_importance_model": "Random Forest",
+        "feature_importance": extract_feature_importance(feature_importance_model, FEATURES),
         "training_rows": int(len(model_dataset)),
         "tournament_success_rows": int(len(tournament_success_dataset)),
         "available_prediction_teams": int(team_features[PREDICTION_COLUMNS].dropna().shape[0]),
         "data_gaps": [
             "No possession, shots, shots-on-target, or fouls dataset is present in the local project folder.",
+            "The requested world_cup_2018_squads.xlsx file is not present; player-strength features are derived from FIFA18 nationality-level player records instead of exact 2018 roster membership.",
             "Jordan has ranking data but no FIFA18 player rows, so median player-strength features are used.",
         ],
     }

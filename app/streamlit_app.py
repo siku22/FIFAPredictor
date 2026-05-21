@@ -9,6 +9,8 @@ import streamlit as st
 ROOT_DIR = Path(__file__).resolve().parents[1]
 MODELS_DIR = ROOT_DIR / "models"
 REFERENCE_DATA_DIR = ROOT_DIR / "data" / "reference"
+DOCS_DIR = ROOT_DIR / "docs"
+PROCESSED_DATA_DIR = ROOT_DIR / "data" / "processed"
 FEATURES = [
     "overall_diff",
     "attack_diff",
@@ -21,6 +23,11 @@ FEATURES = [
     "elite_player_diff",
     "rank_advantage",
     "points_diff",
+    "strength_diff",
+    "spine_diff",
+    "rank_points_blend",
+    "attack_vs_defense_gap",
+    "abs_strength_gap",
 ]
 PREDICTION_COLUMNS = [
     "avg_overall",
@@ -35,6 +42,97 @@ PREDICTION_COLUMNS = [
     "rank",
     "total_points",
 ]
+TEAM_COMPARISON_COLUMNS = {
+    "avg_overall": "Overall",
+    "attack_strength": "Attack",
+    "midfield_strength": "Midfield",
+    "defense_strength": "Defense",
+    "goalkeeper_strength": "Goalkeeper",
+    "avg_age": "Avg age",
+    "team_balance": "Balance",
+    "num_players": "Player pool",
+    "elite_players": "Elite players",
+    "rank": "FIFA rank",
+    "total_points": "FIFA points",
+}
+FEATURE_LABELS = {
+    "overall_diff": "overall rating",
+    "attack_diff": "attack",
+    "midfield_diff": "midfield",
+    "defense_diff": "defense",
+    "goalkeeper_diff": "goalkeeping",
+    "age_diff": "average age",
+    "balance_diff": "squad balance",
+    "player_pool_diff": "player pool",
+    "elite_player_diff": "elite-player count",
+    "rank_advantage": "FIFA rank",
+    "points_diff": "ranking points",
+    "strength_diff": "combined strength",
+    "spine_diff": "team spine",
+    "rank_points_blend": "rank-points blend",
+    "attack_vs_defense_gap": "attack-defense gap",
+    "abs_strength_gap": "strength gap",
+}
+COUNTRY_THEMES = {
+    "Brazil": {"primary": "#009739", "secondary": "#FEDD00", "accent": "#012169"},
+    "France": {"primary": "#1A2A6C", "secondary": "#FFFFFF", "accent": "#EF4135"},
+    "Argentina": {"primary": "#75AADB", "secondary": "#FFFFFF", "accent": "#FCBF49"},
+    "Spain": {"primary": "#AA151B", "secondary": "#F1BF00", "accent": "#7A0C12"},
+    "United States": {"primary": "#3C3B6E", "secondary": "#FFFFFF", "accent": "#B22234"},
+    "Mexico": {"primary": "#006847", "secondary": "#FFFFFF", "accent": "#CE1126"},
+    "Portugal": {"primary": "#006600", "secondary": "#FF0000", "accent": "#FFD100"},
+    "Japan": {"primary": "#FFFFFF", "secondary": "#BC002D", "accent": "#1F2937"},
+}
+TEAM_FLAG_EMOJI = {
+    "Algeria": "🇩🇿",
+    "Argentina": "🇦🇷",
+    "Australia": "🇦🇺",
+    "Austria": "🇦🇹",
+    "Belgium": "🇧🇪",
+    "Bosnia and Herzegovina": "🇧🇦",
+    "Brazil": "🇧🇷",
+    "Canada": "🇨🇦",
+    "Cape Verde": "🇨🇻",
+    "Colombia": "🇨🇴",
+    "Croatia": "🇭🇷",
+    "Curaçao": "🇨🇼",
+    "Czechia": "🇨🇿",
+    "DR Congo": "🇨🇩",
+    "Ecuador": "🇪🇨",
+    "Egypt": "🇪🇬",
+    "England": "🏴",
+    "France": "🇫🇷",
+    "Germany": "🇩🇪",
+    "Ghana": "🇬🇭",
+    "Haiti": "🇭🇹",
+    "Iran": "🇮🇷",
+    "Iraq": "🇮🇶",
+    "Ivory Coast": "🇨🇮",
+    "Japan": "🇯🇵",
+    "Jordan": "🇯🇴",
+    "Mexico": "🇲🇽",
+    "Morocco": "🇲🇦",
+    "Netherlands": "🇳🇱",
+    "New Zealand": "🇳🇿",
+    "Norway": "🇳🇴",
+    "Panama": "🇵🇦",
+    "Paraguay": "🇵🇾",
+    "Portugal": "🇵🇹",
+    "Qatar": "🇶🇦",
+    "Saudi Arabia": "🇸🇦",
+    "Scotland": "🏴",
+    "Senegal": "🇸🇳",
+    "South Africa": "🇿🇦",
+    "South Korea": "🇰🇷",
+    "Spain": "🇪🇸",
+    "Sweden": "🇸🇪",
+    "Switzerland": "🇨🇭",
+    "Tunisia": "🇹🇳",
+    "Türkiye": "🇹🇷",
+    "United States": "🇺🇸",
+    "Uruguay": "🇺🇾",
+    "Uzbekistan": "🇺🇿",
+}
 TEAM_NAME_ALIASES = {
     "Bosnia Herzegovina": "Bosnia and Herzegovina",
     "Cabo Verde": "Cape Verde",
@@ -136,9 +234,433 @@ def metrics_table(results, columns):
     return pd.DataFrame(rows)
 
 
-def inject_soccer_theme():
+def confusion_matrix_table(matrix):
+    if not matrix:
+        return pd.DataFrame()
+    return pd.DataFrame(
+        matrix,
+        index=["Actual no home win", "Actual home win"],
+        columns=["Predicted no home win", "Predicted home win"],
+    )
+
+
+def initials(team_name):
+    parts = [part for part in team_name.replace("&", " ").split() if part]
+    if not parts:
+        return "FC"
+    if len(parts) == 1:
+        return parts[0][:2].upper()
+    return (parts[0][0] + parts[-1][0]).upper()
+
+
+def team_theme(team_name):
+    if team_name in COUNTRY_THEMES:
+        return COUNTRY_THEMES[team_name]
+    palette = [
+        {"primary": "#0B5D3B", "secondary": "#D6B35A", "accent": "#063823"},
+        {"primary": "#1A2A6C", "secondary": "#FFFFFF", "accent": "#EF4135"},
+        {"primary": "#AA151B", "secondary": "#F1BF00", "accent": "#7A0C12"},
+        {"primary": "#006847", "secondary": "#FFFFFF", "accent": "#CE1126"},
+        {"primary": "#552583", "secondary": "#FDB927", "accent": "#2C1A4D"},
+        {"primary": "#0057B8", "secondary": "#FFD700", "accent": "#183153"},
+    ]
+    return palette[sum(ord(char) for char in team_name) % len(palette)]
+
+
+def team_badge(team_name, compact=False):
+    theme = team_theme(team_name)
+    flag = TEAM_FLAG_EMOJI.get(team_name, "")
+    label = initials(team_name) if compact else team_name
+    return (
+        f'<span class="team-badge" style="--badge-primary:{theme["primary"]};'
+        f'--badge-secondary:{theme["secondary"]};--badge-accent:{theme["accent"]};">'
+        f'<span class="badge-mark">{flag or initials(team_name)}</span>'
+        f'<span>{label}</span></span>'
+    )
+
+
+def badge_line(teams):
+    return "".join(team_badge(team) for team in teams)
+
+
+def team_row(team_name, team_features):
+    tf = team_features.copy()
+    tf["team_clean"] = tf["team"].str.lower().str.strip()
+    return tf[tf["team_clean"] == team_name.lower().strip()].iloc[0]
+
+
+def team_comparison_table(team_a, team_b, team_features):
+    row_a = team_row(team_a, team_features)
+    row_b = team_row(team_b, team_features)
+    rows = []
+    for column, label in TEAM_COMPARISON_COLUMNS.items():
+        value_a = row_a[column]
+        value_b = row_b[column]
+        if column == "rank":
+            leader = team_a if value_a < value_b else team_b if value_b < value_a else "Even"
+        else:
+            leader = team_a if value_a > value_b else team_b if value_b > value_a else "Even"
+        rows.append(
+            {
+                "Metric": label,
+                team_a: value_a,
+                team_b: value_b,
+                "Advantage": leader,
+            }
+        )
+    comparison = pd.DataFrame(rows)
+    numeric_columns = [team_a, team_b]
+    comparison[numeric_columns] = comparison[numeric_columns].round(2)
+    return comparison
+
+
+def confidence_label(prob_a, prob_b):
+    gap = abs(prob_a - prob_b)
+    if gap >= 0.3:
+        return "High", gap
+    if gap >= 0.15:
+        return "Medium", gap
+    return "Low", gap
+
+
+def prediction_explanation(result, input_data, team_a, team_b):
+    winner = result["winner"]
+    loser = team_b if winner == team_a else team_a
+    row = input_data.iloc[0]
+    winner_sign = 1 if winner == team_a else -1
+    advantages = []
+    for feature in FEATURES:
+        value = row[feature] * winner_sign
+        if feature == "balance_diff":
+            value = -value
+        if value > 0:
+            advantages.append((FEATURE_LABELS[feature], abs(row[feature])))
+
+    top_advantages = [label for label, _ in sorted(advantages, key=lambda item: item[1], reverse=True)[:3]]
+    if not top_advantages:
+        return f"The model favors {winner}, but the feature differences are fairly balanced against {loser}."
+    if len(top_advantages) == 1:
+        factors = top_advantages[0]
+    else:
+        factors = ", ".join(top_advantages[:-1]) + f", and {top_advantages[-1]}"
+    return f"The model favors {winner} mainly because of advantages in {factors} relative to {loser}."
+
+
+def add_engineered_match_features(df):
+    df = df.copy()
+    df["strength_diff"] = df[
+        ["overall_diff", "attack_diff", "midfield_diff", "defense_diff", "goalkeeper_diff"]
+    ].mean(axis=1)
+    df["spine_diff"] = df[["midfield_diff", "defense_diff", "goalkeeper_diff"]].mean(axis=1)
+    df["rank_points_blend"] = (df["rank_advantage"] * 0.03) + (df["points_diff"] * 0.001)
+    df["attack_vs_defense_gap"] = df["attack_diff"] - df["defense_diff"]
+    df["abs_strength_gap"] = df["strength_diff"].abs()
+    return df
+
+
+def format_percent_table(df):
+    formatted = df.copy()
+    for column in formatted.columns:
+        if column != "Team":
+            formatted[column] = formatted[column].map("{:.2%}".format)
+    return formatted
+
+
+def champion_explanation(champion_name, team_features):
+    row = team_row(champion_name, team_features)
+    ready = team_features.dropna(subset=PREDICTION_COLUMNS)
+    strengths = []
+    comparisons = {
+        "attack": ("attack_strength", "attack strength", True),
+        "midfield": ("midfield_strength", "midfield strength", True),
+        "defense": ("defense_strength", "defensive strength", True),
+        "goalkeeper": ("goalkeeper_strength", "goalkeeper rating", True),
+        "points": ("total_points", "FIFA ranking points", True),
+        "rank": ("rank", "FIFA rank", False),
+    }
+    for _, (column, label, higher_is_better) in comparisons.items():
+        value = row[column]
+        median = ready[column].median()
+        if higher_is_better and value >= median:
+            strengths.append((label, abs(value - median)))
+        elif not higher_is_better and value <= median:
+            strengths.append((label, abs(value - median)))
+
+    top = [label for label, _ in sorted(strengths, key=lambda item: item[1], reverse=True)[:3]]
+    if not top:
+        return f"{champion_name} rises through the simulation mostly through balanced probabilities across rounds."
+    if len(top) == 1:
+        factors = top[0]
+    else:
+        factors = ", ".join(top[:-1]) + f", and {top[-1]}"
+    return f"{champion_name} grades well because its team profile is strong in {factors} compared with the available field."
+
+
+def render_bracket(sample_result):
+    if not sample_result:
+        return
+    rounds = [
+        ("Round of 32", sample_result.get("round_of_32", [])),
+        ("Round of 16", sample_result.get("round_of_16", [])),
+        ("Quarterfinals", sample_result.get("quarterfinals", [])),
+        ("Semifinals", sample_result.get("semifinals", [])),
+        ("Finalists", sample_result.get("finalists", [])),
+        ("Champion", [sample_result.get("champion", "")]),
+    ]
+    columns = []
+    for round_name, teams in rounds:
+        team_markup = "".join(
+            f'<div class="bracket-team">{team_badge(team, compact=True)}</div>'
+            for team in teams
+            if team
+        )
+        columns.append(
+            f'<div class="bracket-round"><div class="bracket-title">{round_name}</div>{team_markup}</div>'
+        )
+    st.markdown(f'<div class="bracket-board">{"".join(columns)}</div>', unsafe_allow_html=True)
+
+
+def add_file_download(label, path, mime):
+    if path.exists():
+        st.download_button(
+            label,
+            data=path.read_bytes(),
+            file_name=path.name,
+            mime=mime,
+            use_container_width=True,
+        )
+
+
+def reset_penalty_game():
+    st.session_state["penalty_score"] = 0
+    st.session_state["penalty_kicks"] = 0
+    st.session_state["penalty_streak"] = 0
+    st.session_state["penalty_best_streak"] = 0
+    st.session_state["penalty_history"] = []
+    st.session_state["penalty_message"] = "Pick a corner and take the first shot."
+    st.session_state["penalty_last_shot"] = "idle"
+    st.session_state["penalty_last_keeper"] = "center"
+    st.session_state["penalty_last_result"] = "ready"
+    st.session_state["penalty_crowd"] = 50
+    st.session_state["penalty_celebrate"] = False
+
+
+def play_penalty(direction, shot_style, power, difficulty):
+    if "penalty_score" not in st.session_state:
+        reset_penalty_game()
+    if st.session_state["penalty_kicks"] >= 5:
+        return
+
+    keeper_weights = {
+        "Friendly": [0.32, 0.22, 0.32],
+        "Balanced": [0.36, 0.28, 0.36],
+        "Final Boss": [0.41, 0.34, 0.41],
+    }
+    weights = np.array(keeper_weights[difficulty], dtype=float)
+    if direction == "Left":
+        weights[0] += 0.08
+    elif direction == "Center":
+        weights[1] += 0.08
+    else:
+        weights[2] += 0.08
+    weights = weights / weights.sum()
+
+    keeper_direction = np.random.choice(["Left", "Center", "Right"], p=weights)
+    style_save_bonus = {"Placement": -0.08, "Power": 0.02, "Chip": -0.02}
+    style_miss_bonus = {"Placement": 0.02, "Power": 0.08, "Chip": 0.05}
+    difficulty_save_bonus = {"Friendly": -0.08, "Balanced": 0.0, "Final Boss": 0.1}
+    miss_chance = max(0.01, min(0.22, abs(power - 6) * 0.018 + style_miss_bonus[shot_style]))
+    save_chance = 0.82 + style_save_bonus[shot_style] + difficulty_save_bonus[difficulty]
+    same_direction = direction == keeper_direction
+    missed = np.random.random() < miss_chance
+    saved = same_direction and np.random.random() < save_chance
+    scored = not missed and not saved
+
+    st.session_state["penalty_kicks"] += 1
+    if scored:
+        st.session_state["penalty_score"] += 1
+        st.session_state["penalty_streak"] += 1
+        st.session_state["penalty_best_streak"] = max(
+            st.session_state["penalty_best_streak"],
+            st.session_state["penalty_streak"],
+        )
+        st.session_state["penalty_crowd"] = min(100, st.session_state["penalty_crowd"] + 14)
+        st.session_state["penalty_celebrate"] = True
+    else:
+        st.session_state["penalty_streak"] = 0
+        st.session_state["penalty_crowd"] = max(5, st.session_state["penalty_crowd"] - 10)
+
+    result = "Goal" if scored else "Wide" if missed else "Saved"
+    st.session_state["penalty_message"] = (
+        f"{result}. {shot_style} shot, power {power}/10. "
+        f"You aimed {direction.lower()} and the keeper went {keeper_direction.lower()}."
+    )
+    st.session_state["penalty_last_shot"] = direction.lower()
+    st.session_state["penalty_last_keeper"] = keeper_direction.lower()
+    st.session_state["penalty_last_result"] = result.lower()
+    st.session_state["penalty_history"].append(
+        {
+            "Kick": st.session_state["penalty_kicks"],
+            "Shot": direction,
+            "Style": shot_style,
+            "Power": power,
+            "Keeper": keeper_direction,
+            "Result": result,
+        }
+    )
+
+
+def render_penalty_game():
+    if "penalty_score" not in st.session_state:
+        reset_penalty_game()
+
+    kicks = st.session_state["penalty_kicks"]
+    score = st.session_state["penalty_score"]
+    remaining = max(0, 5 - kicks)
+    streak = st.session_state.get("penalty_streak", 0)
+    best_streak = st.session_state.get("penalty_best_streak", 0)
+    crowd = st.session_state.get("penalty_crowd", 50)
+    shot_class = st.session_state.get("penalty_last_shot", "idle")
+    keeper_class = st.session_state.get("penalty_last_keeper", "center")
+    result_class = st.session_state.get("penalty_last_result", "ready")
+    result_text = "Ready" if result_class == "ready" else result_class.title()
+    team_name = st.session_state.get("penalty_team_name", "Tiny Strikers").strip() or "Tiny Strikers"
+
+    if st.session_state.get("penalty_celebrate"):
+        st.balloons()
+        st.session_state["penalty_celebrate"] = False
+
+    control_a, control_b, control_c = st.columns([1.2, 1, 1])
+    with control_a:
+        team_name = st.text_input("Team name", value=team_name, key="penalty_team_name").strip() or "Tiny Strikers"
+    with control_b:
+        selected_theme = st.selectbox("Country color theme", list(COUNTRY_THEMES), key="penalty_country_theme")
+    with control_c:
+        difficulty = st.selectbox("Keeper difficulty", ["Friendly", "Balanced", "Final Boss"], index=1)
+    theme = COUNTRY_THEMES[selected_theme]
+    primary = theme["primary"]
+    secondary = theme["secondary"]
+    accent = theme["accent"]
+
+    style_col, power_col = st.columns([1, 2])
+    with style_col:
+        shot_style = st.selectbox("Shot style", ["Placement", "Power", "Chip"], index=0)
+    with power_col:
+        power = st.slider("Shot power", min_value=1, max_value=10, value=6)
+
     st.markdown(
+        f"""
+        <div class="game-pitch themed-pitch" style="
+            --team-primary:{primary};
+            --team-secondary:{secondary};
+            --team-accent:{accent};
+            background: linear-gradient(90deg, rgba(255,255,255,0.16) 1px, transparent 1px),
+                        radial-gradient(circle at 84% 14%, {secondary}55, transparent 24%),
+                        linear-gradient(135deg, {primary}, {accent});
+            border-color:{secondary};
+        ">
+            <div class="eyebrow">Mini game</div>
+            <h3 style="margin:0;color:white;">Penalty Shootout</h3>
+            <div style="color:rgba(255,255,255,0.82);margin-top:0.35rem;">
+                {team_name} get five kicks. Pick a style, set the power, and beat the keeper.
+            </div>
+            <div class="mini-scoreboard">
+                <span class="kit-swatch">
+                    <i style="background:{primary};"></i>
+                    <i style="background:{secondary};"></i>
+                    <i style="background:{accent};"></i>
+                </span>
+                <span>Theme: <strong>{selected_theme}</strong></span>
+                <span>Team: <strong>{team_name}</strong></span>
+                <span>Best streak: <strong>{best_streak}</strong></span>
+                <span>Crowd: <strong>{crowd}%</strong></span>
+            </div>
+            <div class="animated-goal result-{result_class}" style="border-color:{secondary}; box-shadow: inset 0 0 0 4px {accent}66;">
+                <div class="net-lines"></div>
+                <div class="keeper keeper-{keeper_class}" style="background:{secondary}; border-color:{accent};">GK</div>
+                <div class="ball ball-{shot_class}" style="background:{secondary}; border-color:{accent};"></div>
+                <div class="result-burst">{result_text}</div>
+                <div class="goal-cell" style="background:{primary}33;">Left</div>
+                <div class="goal-cell" style="background:{secondary}22;">Center</div>
+                <div class="goal-cell" style="background:{accent}33;">Right</div>
+            </div>
+            <div class="shot-lane" style="border-color:{secondary}88;"></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.progress(crowd / 100, text="Crowd energy")
+
+    g1, g2, g3 = st.columns(3)
+    with g1:
+        st.metric("Goals", f"{score}/5")
+    with g2:
+        st.metric("Kicks Taken", kicks)
+    with g3:
+        st.metric("Streak", streak, f"{remaining} kicks left")
+
+    st.markdown(f'<div class="game-status">{st.session_state["penalty_message"]}</div>', unsafe_allow_html=True)
+
+    shot_cols = st.columns(3)
+    disabled = kicks >= 5
+    with shot_cols[0]:
+        if st.button("Shoot Left", use_container_width=True, disabled=disabled):
+            play_penalty("Left", shot_style, power, difficulty)
+            st.rerun()
+    with shot_cols[1]:
+        if st.button("Shoot Center", use_container_width=True, disabled=disabled):
+            play_penalty("Center", shot_style, power, difficulty)
+            st.rerun()
+    with shot_cols[2]:
+        if st.button("Shoot Right", use_container_width=True, disabled=disabled):
+            play_penalty("Right", shot_style, power, difficulty)
+            st.rerun()
+
+    if kicks >= 5:
+        if score >= 4:
+            st.success("Final whistle: elite finishing. The crowd is singing your team name.")
+        elif score >= 2:
+            st.info("Final whistle: respectable shootout. Solid work from the spot.")
+        else:
+            st.warning("Final whistle: the keeper had your number. Time for extra shooting practice.")
+
+    if st.button("Reset Shootout", use_container_width=True):
+        reset_penalty_game()
+        st.rerun()
+
+    history = pd.DataFrame(st.session_state["penalty_history"])
+    if not history.empty:
+        st.subheader("Shot Log")
+        st.dataframe(history, use_container_width=True, hide_index=True)
+
+
+def inject_soccer_theme(theme_mode="Stadium Mode"):
+    clean_mode_css = ""
+    if theme_mode == "Clean Report Mode":
+        clean_mode_css = """
+        .stApp {
+            background: #f4f7f5;
+            color: #102017;
+        }
+        [data-testid="stHeader"] {
+            background: rgba(244,247,245,0.9);
+        }
+        .hero-panel {
+            background: linear-gradient(135deg, #ffffff, #eaf5ee);
+            border-color: rgba(11,93,59,0.18);
+            box-shadow: 0 12px 34px rgba(16,32,23,0.12);
+        }
+        .hero-title {
+            color: #0b5d3b;
+        }
+        .hero-copy {
+            color: #496256;
+        }
+        [data-testid="stTabs"] button {
+            color: #102017;
+        }
         """
+    css = """
         <style>
         :root {
             --pitch: #0b5d3b;
@@ -342,17 +864,364 @@ def inject_soccer_theme():
             font-size: 0.88rem;
         }
 
+        .team-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.38rem;
+            margin: 0.16rem;
+            padding: 0.32rem 0.6rem;
+            border-radius: 999px;
+            background: linear-gradient(90deg, var(--badge-primary), var(--badge-accent));
+            color: #ffffff;
+            border: 1px solid color-mix(in srgb, var(--badge-secondary) 75%, white);
+            font-weight: 800;
+            box-shadow: 0 8px 18px rgba(0,0,0,0.14);
+        }
+
+        .badge-mark {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 1.65rem;
+            height: 1.65rem;
+            border-radius: 999px;
+            background: var(--badge-secondary);
+            color: var(--badge-accent);
+            font-weight: 900;
+            border: 1px solid rgba(255,255,255,0.62);
+        }
+
+        .badge-row {
+            margin: 0.45rem 0 0.8rem;
+        }
+
+        .bracket-board {
+            display: grid;
+            grid-template-columns: repeat(6, minmax(130px, 1fr));
+            gap: 0.7rem;
+            overflow-x: auto;
+            padding: 0.8rem;
+            background: rgba(255,255,255,0.92);
+            border: 1px solid rgba(255,255,255,0.52);
+            border-radius: 8px;
+            box-shadow: 0 18px 40px rgba(0,0,0,0.15);
+        }
+
+        .bracket-round {
+            min-width: 130px;
+            border-left: 3px solid #0b5d3b;
+            padding-left: 0.55rem;
+        }
+
+        .bracket-title {
+            color: #496256;
+            font-size: 0.78rem;
+            font-weight: 900;
+            text-transform: uppercase;
+            margin-bottom: 0.45rem;
+        }
+
+        .bracket-team {
+            margin-bottom: 0.3rem;
+        }
+
+        .game-pitch {
+            background:
+                linear-gradient(90deg, rgba(255,255,255,0.12) 1px, transparent 1px),
+                linear-gradient(135deg, rgba(11,93,59,0.96), rgba(6,56,35,0.96));
+            background-size: 58px 58px, auto;
+            border: 2px solid rgba(255,255,255,0.5);
+            border-radius: 8px;
+            padding: 1.2rem;
+            color: white;
+            box-shadow: 0 18px 40px rgba(0,0,0,0.18);
+        }
+
+        .themed-pitch {
+            background:
+                linear-gradient(90deg, rgba(255,255,255,0.12) 1px, transparent 1px),
+                radial-gradient(circle at 82% 12%, color-mix(in srgb, var(--team-secondary) 34%, transparent), transparent 22%),
+                linear-gradient(135deg, color-mix(in srgb, var(--team-primary) 82%, #063823), #063823);
+            border-color: color-mix(in srgb, var(--team-secondary) 72%, white);
+        }
+
+        .goal-frame,
+        .animated-goal {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 0.5rem;
+            margin: 0.8rem 0;
+            padding: 0.8rem;
+            border: 3px solid rgba(255,255,255,0.78);
+            border-bottom-width: 8px;
+            border-radius: 8px 8px 4px 4px;
+            background: rgba(255,255,255,0.1);
+        }
+
+        .animated-goal {
+            position: relative;
+            min-height: 230px;
+            overflow: hidden;
+            align-items: stretch;
+            background:
+                linear-gradient(rgba(255,255,255,0.18) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.18) 1px, transparent 1px),
+                rgba(255,255,255,0.08);
+            background-size: 28px 28px;
+        }
+
+        .themed-pitch .animated-goal {
+            border-color: color-mix(in srgb, var(--team-secondary) 70%, white);
+            box-shadow: inset 0 0 0 3px color-mix(in srgb, var(--team-accent) 28%, transparent);
+        }
+
+        .mini-scoreboard {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.55rem;
+            margin-top: 0.8rem;
+        }
+
+        .mini-scoreboard span {
+            background: rgba(255,255,255,0.14);
+            border: 1px solid rgba(255,255,255,0.25);
+            border-radius: 999px;
+            padding: 0.35rem 0.7rem;
+            color: #ffffff;
+        }
+
+        .kit-swatch {
+            display: inline-flex;
+            gap: 0.25rem;
+            align-items: center;
+        }
+
+        .kit-swatch i {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            border: 1px solid rgba(255,255,255,0.7);
+            display: inline-block;
+        }
+
+        .kit-swatch i:nth-child(1) {
+            background: var(--team-primary);
+        }
+
+        .kit-swatch i:nth-child(2) {
+            background: var(--team-secondary);
+        }
+
+        .kit-swatch i:nth-child(3) {
+            background: var(--team-accent);
+        }
+
+        .goal-cell {
+            min-height: 190px;
+            border: 1px dashed rgba(255,255,255,0.45);
+            border-radius: 8px;
+            display: flex;
+            align-items: flex-start;
+            justify-content: center;
+            text-align: center;
+            font-weight: 800;
+            color: #ffffff;
+            padding-top: 0.65rem;
+            z-index: 1;
+        }
+
+        .net-lines {
+            position: absolute;
+            inset: 0;
+            background:
+                radial-gradient(circle at 50% 110%, transparent 0 38%, rgba(255,255,255,0.2) 39%, transparent 40%),
+                linear-gradient(90deg, transparent 32%, rgba(255,255,255,0.26) 33%, transparent 34%, transparent 65%, rgba(255,255,255,0.26) 66%, transparent 67%);
+            pointer-events: none;
+        }
+
+        .keeper {
+            position: absolute;
+            left: 50%;
+            bottom: 20px;
+            width: 66px;
+            height: 46px;
+            transform: translateX(-50%);
+            border-radius: 16px 16px 10px 10px;
+            background: var(--team-secondary, #d6b35a);
+            color: #102017;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 900;
+            border: 2px solid var(--team-accent, rgba(255,255,255,0.8));
+            z-index: 4;
+            box-shadow: 0 10px 22px rgba(0,0,0,0.28);
+            animation: keeper-ready 0.7s ease-in-out infinite alternate;
+        }
+
+        .keeper-left {
+            animation: keeper-left 0.9s cubic-bezier(.2,.8,.2,1) both;
+        }
+
+        .keeper-center {
+            animation: keeper-center 0.9s cubic-bezier(.2,.8,.2,1) both;
+        }
+
+        .keeper-right {
+            animation: keeper-right 0.9s cubic-bezier(.2,.8,.2,1) both;
+        }
+
+        .ball {
+            position: absolute;
+            left: 50%;
+            bottom: -18px;
+            width: 34px;
+            height: 34px;
+            transform: translateX(-50%);
+            border-radius: 50%;
+            background:
+                radial-gradient(circle at 35% 30%, #ffffff 0 18%, transparent 19%),
+                radial-gradient(circle at 64% 68%, #111 0 10%, transparent 11%),
+                var(--team-secondary, #f7fbf6);
+            border: 2px solid var(--team-accent, #102017);
+            z-index: 5;
+            box-shadow: 0 12px 18px rgba(0,0,0,0.28);
+        }
+
+        .ball-idle {
+            animation: ball-idle 1s ease-in-out infinite alternate;
+        }
+
+        .ball-left {
+            animation: ball-left 0.9s cubic-bezier(.2,.9,.2,1) both;
+        }
+
+        .ball-center {
+            animation: ball-center 0.9s cubic-bezier(.2,.9,.2,1) both;
+        }
+
+        .ball-right {
+            animation: ball-right 0.9s cubic-bezier(.2,.9,.2,1) both;
+        }
+
+        .result-burst {
+            position: absolute;
+            left: 50%;
+            top: 44%;
+            transform: translate(-50%, -50%) scale(0.8);
+            opacity: 0;
+            z-index: 6;
+            padding: 0.35rem 0.8rem;
+            border-radius: 999px;
+            background: rgba(16,32,23,0.82);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.4);
+            font-weight: 900;
+            letter-spacing: 0.03em;
+            animation: result-pop 1.1s ease-out both;
+        }
+
+        .result-ready .result-burst {
+            animation: none;
+            opacity: 0;
+        }
+
+        .result-goal .result-burst {
+            background: #0b5d3b;
+        }
+
+        .result-saved .result-burst {
+            background: #7a2f20;
+        }
+
+        .result-wide .result-burst {
+            background: #7a5b20;
+        }
+
+        .shot-lane {
+            width: 44%;
+            height: 72px;
+            margin: 0 auto;
+            border-left: 2px solid rgba(255,255,255,0.28);
+            border-right: 2px solid rgba(255,255,255,0.28);
+            border-bottom: 2px solid rgba(255,255,255,0.22);
+            border-radius: 0 0 120px 120px;
+        }
+
+        @keyframes ball-idle {
+            from { transform: translateX(-50%) translateY(0); }
+            to { transform: translateX(-50%) translateY(-8px); }
+        }
+
+        @keyframes ball-left {
+            0% { left: 50%; bottom: -18px; transform: translateX(-50%) scale(1); }
+            70% { left: 18%; bottom: 150px; transform: translateX(-50%) scale(0.78) rotate(-260deg); }
+            100% { left: 18%; bottom: 150px; transform: translateX(-50%) scale(0.78) rotate(-300deg); }
+        }
+
+        @keyframes ball-center {
+            0% { left: 50%; bottom: -18px; transform: translateX(-50%) scale(1); }
+            70% { left: 50%; bottom: 160px; transform: translateX(-50%) scale(0.78) rotate(220deg); }
+            100% { left: 50%; bottom: 160px; transform: translateX(-50%) scale(0.78) rotate(260deg); }
+        }
+
+        @keyframes ball-right {
+            0% { left: 50%; bottom: -18px; transform: translateX(-50%) scale(1); }
+            70% { left: 82%; bottom: 150px; transform: translateX(-50%) scale(0.78) rotate(260deg); }
+            100% { left: 82%; bottom: 150px; transform: translateX(-50%) scale(0.78) rotate(300deg); }
+        }
+
+        @keyframes keeper-ready {
+            from { transform: translateX(-50%) translateY(0); }
+            to { transform: translateX(-50%) translateY(-4px); }
+        }
+
+        @keyframes keeper-left {
+            0% { left: 50%; bottom: 20px; transform: translateX(-50%) rotate(0deg); }
+            100% { left: 21%; bottom: 108px; transform: translateX(-50%) rotate(-22deg); }
+        }
+
+        @keyframes keeper-center {
+            0% { left: 50%; bottom: 20px; transform: translateX(-50%) scale(1); }
+            100% { left: 50%; bottom: 112px; transform: translateX(-50%) scale(1.08); }
+        }
+
+        @keyframes keeper-right {
+            0% { left: 50%; bottom: 20px; transform: translateX(-50%) rotate(0deg); }
+            100% { left: 79%; bottom: 108px; transform: translateX(-50%) rotate(22deg); }
+        }
+
+        @keyframes result-pop {
+            0%, 45% { opacity: 0; transform: translate(-50%, -50%) scale(0.75); }
+            62% { opacity: 1; transform: translate(-50%, -50%) scale(1.08); }
+            100% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+        }
+
+        .game-status {
+            background: rgba(255,255,255,0.94);
+            color: var(--ink);
+            border-radius: 8px;
+            padding: 1rem;
+            border: 1px solid rgba(255,255,255,0.5);
+        }
+
         @media (max-width: 780px) {
             .stat-strip,
             .score-row {
                 grid-template-columns: 1fr;
             }
+            .bracket-board {
+                grid-template-columns: repeat(6, 150px);
+            }
             .hero-panel {
                 padding: 1.4rem;
             }
         }
+        __CLEAN_MODE_CSS__
         </style>
-        """,
+        """.replace("__CLEAN_MODE_CSS__", clean_mode_css)
+    st.markdown(
+        css,
         unsafe_allow_html=True,
     )
 
@@ -416,7 +1285,7 @@ def render_scoreboard(team_a, team_b, winner, prob_a, prob_b):
 
 
 def render_group_card(group_name, group_teams):
-    teams_markup = "".join(f'<span class="group-pill">{team}</span>' for team in group_teams)
+    teams_markup = badge_line(group_teams)
     st.markdown(
         f"""
         <div class="section-card">
@@ -429,11 +1298,8 @@ def render_group_card(group_name, group_teams):
 
 
 def predict_match(team_a_name, team_b_name, team_features, model):
-    tf = team_features.copy()
-    tf["team_clean"] = tf["team"].str.lower().str.strip()
-
-    team_a = tf[tf["team_clean"] == team_a_name.lower().strip()].iloc[0]
-    team_b = tf[tf["team_clean"] == team_b_name.lower().strip()].iloc[0]
+    team_a = team_row(team_a_name, team_features)
+    team_b = team_row(team_b_name, team_features)
 
     input_data = pd.DataFrame(
         {
@@ -449,7 +1315,8 @@ def predict_match(team_a_name, team_b_name, team_features, model):
             "rank_advantage": [team_b["rank"] - team_a["rank"]],
             "points_diff": [team_a["total_points"] - team_b["total_points"]],
         }
-    )[FEATURES]
+    )
+    input_data = add_engineered_match_features(input_data)[FEATURES]
 
     prob_a = model.predict_proba(input_data)[0][1]
     prob_b = 1 - prob_a
@@ -458,6 +1325,7 @@ def predict_match(team_a_name, team_b_name, team_features, model):
         "winner": team_a_name if prob_a > prob_b else team_b_name,
         "team_a_probability": prob_a,
         "team_b_probability": prob_b,
+        "input_data": input_data,
     }
 
 
@@ -650,7 +1518,7 @@ def run_world_cup_simulations(groups, team_features, model, simulation_count, se
     missing_teams = sorted(set(groups["team"]) - set(teams_in_model))
 
     if missing_teams:
-        return None, missing_teams
+        return None, missing_teams, None
 
     rng = np.random.default_rng(seed)
     counts = {
@@ -666,8 +1534,11 @@ def run_world_cup_simulations(groups, team_features, model, simulation_count, se
         for team in groups["team"].unique()
     }
 
+    sample_result = None
     for _ in range(simulation_count):
         result = simulate_tournament(groups, probabilities, rng)
+        if sample_result is None:
+            sample_result = result
         for team in result["group_winners"]:
             counts[team]["Group Winner"] += 1
         for team in result["round_of_32"]:
@@ -686,7 +1557,7 @@ def run_world_cup_simulations(groups, team_features, model, simulation_count, se
     for column in summary.columns[1:]:
         summary[column] = summary[column] / simulation_count
 
-    return summary.sort_values("Champion", ascending=False), missing_teams
+    return summary.sort_values("Champion", ascending=False), missing_teams, sample_result
 
 
 st.set_page_config(page_title="2026 FIFA Predictor", page_icon="soccer", layout="wide")
@@ -697,10 +1568,22 @@ except FileNotFoundError as exc:
     st.error(str(exc))
     st.stop()
 
-inject_soccer_theme()
+theme_mode = st.sidebar.radio(
+    "App theme",
+    ["Stadium Mode", "Clean Report Mode"],
+    horizontal=True,
+)
+inject_soccer_theme(theme_mode)
 render_hero(metrics)
 
-match_tab, simulator_tab, report_tab = st.tabs(["Match Predictor", "World Cup Simulator", "Model Report"])
+with st.expander("Demo Script"):
+    st.write("- Predict a match: load Brazil vs France, run the prediction, and explain the probability gap.")
+    st.write("- Simulate the 2026 World Cup: load demo settings, run 1,000 simulations, and compare champion/finalist rates.")
+    st.write("- Explain the model: show best-model accuracy, confusion matrix, feature importance, and known data gaps.")
+
+match_tab, simulator_tab, game_tab, report_tab = st.tabs(
+    ["Predict a Match", "Simulate 2026 World Cup", "Play Penalty Shootout", "How the Model Works"]
+)
 
 with match_tab:
     only_qualified = st.toggle("2026 qualified teams only", value=True)
@@ -712,12 +1595,31 @@ with match_tab:
     elif only_qualified:
         st.success("All 48 qualified 2026 World Cup teams are available.")
 
+    demo_col1, demo_col2 = st.columns([1, 2])
+    with demo_col1:
+        if st.button("Load Demo Match", use_container_width=True):
+            st.session_state["team_a_select"] = "Brazil" if "Brazil" in teams else teams[0]
+            st.session_state["team_b_select"] = "France" if "France" in teams else teams[min(1, len(teams) - 1)]
+            st.session_state["demo_match_loaded"] = True
+    with demo_col2:
+        if st.session_state.get("demo_match_loaded"):
+            st.info("Demo match loaded. Click Predict to show the model explanation.")
+
     col1, col2 = st.columns(2)
+    default_a = teams.index("Brazil") if "Brazil" in teams else 0
+    default_b = teams.index("France") if "France" in teams else min(1, len(teams) - 1)
     with col1:
-        team_a = st.selectbox("Team A", teams, index=teams.index("Brazil") if "Brazil" in teams else 0)
+        team_a = st.selectbox("Team A", teams, index=default_a, key="team_a_select")
     with col2:
-        default_b = teams.index("France") if "France" in teams else min(1, len(teams) - 1)
-        team_b = st.selectbox("Team B", teams, index=default_b)
+        team_b = st.selectbox("Team B", teams, index=default_b, key="team_b_select")
+
+    st.markdown(
+        f'<div class="badge-row">{team_badge(team_a)} <span class="vs-badge">VS</span> {team_badge(team_b)}</div>',
+        unsafe_allow_html=True,
+    )
+    st.subheader("Team Comparison")
+    comparison_df = team_comparison_table(team_a, team_b, team_features)
+    st.dataframe(comparison_df, use_container_width=True, hide_index=True)
 
     if st.button("Predict", use_container_width=True):
         if team_a == team_b:
@@ -727,16 +1629,37 @@ with match_tab:
             winner = result["winner"]
             prob_a = result["team_a_probability"]
             prob_b = result["team_b_probability"]
+            confidence, probability_gap = confidence_label(prob_a, prob_b)
+            explanation = prediction_explanation(result, result["input_data"], team_a, team_b)
+            if winner in COUNTRY_THEMES:
+                st.session_state["penalty_country_theme"] = winner
 
             render_scoreboard(team_a, team_b, winner, prob_a, prob_b)
-            metric_a, metric_b = st.columns(2)
+            metric_a, metric_b, metric_c = st.columns(3)
             with metric_a:
                 st.metric(team_a, f"{prob_a:.2%}")
             with metric_b:
                 st.metric(team_b, f"{prob_b:.2%}")
+            with metric_c:
+                st.metric("Confidence", confidence, f"{probability_gap:.1%} gap")
 
             st.progress(float(prob_a), text=f"{team_a} win probability")
+            st.info(explanation)
             st.success(f"Prediction favors {winner}")
+
+            prediction_export = comparison_df.copy()
+            prediction_export["Predicted winner"] = winner
+            prediction_export[f"{team_a} win probability"] = prob_a
+            prediction_export[f"{team_b} win probability"] = prob_b
+            prediction_export["Confidence"] = confidence
+            prediction_export["Explanation"] = explanation
+            st.download_button(
+                "Download match comparison",
+                data=prediction_export.to_csv(index=False).encode("utf-8"),
+                file_name=f"{team_a}_vs_{team_b}_prediction.csv".replace(" ", "_"),
+                mime="text/csv",
+                use_container_width=True,
+            )
 
 with simulator_tab:
     groups = load_world_cup_groups()
@@ -749,21 +1672,49 @@ with simulator_tab:
             with group_cols[index % 4]:
                 render_group_card(group_name, group_teams)
 
+    demo_sim_col1, demo_sim_col2 = st.columns([1, 2])
+    with demo_sim_col1:
+        if st.button("Load Demo Settings", use_container_width=True):
+            st.session_state["simulation_count_slider"] = 1000
+            st.session_state["simulation_seed_input"] = 42
+            st.session_state["demo_sim_loaded"] = True
+    with demo_sim_col2:
+        if st.session_state.get("demo_sim_loaded"):
+            st.info("Demo settings loaded. Click Run World Cup Simulation for a stable walkthrough.")
+
     simulation_count = st.slider(
         "Simulations",
         min_value=100,
         max_value=10000,
         value=1000,
         step=100,
+        key="simulation_count_slider",
     )
-    seed = st.number_input("Random seed", min_value=1, max_value=999999, value=42, step=1)
+    seed = st.number_input(
+        "Random seed",
+        min_value=1,
+        max_value=999999,
+        value=42,
+        step=1,
+        key="simulation_seed_input",
+    )
 
     if st.button("Run World Cup Simulation", use_container_width=True):
         with st.spinner(f"Running {simulation_count:,} tournament simulations..."):
-            summary, missing_teams = run_world_cup_simulations(
+            summary, missing_teams, sample_result = run_world_cup_simulations(
                 groups, team_features, model, simulation_count, int(seed)
             )
+        st.session_state["simulation_summary"] = summary
+        st.session_state["simulation_missing_teams"] = missing_teams
+        st.session_state["simulation_sample_result"] = sample_result
+        st.session_state["simulation_count"] = simulation_count
+        st.session_state["simulation_seed"] = int(seed)
 
+    summary = st.session_state.get("simulation_summary")
+    missing_teams = st.session_state.get("simulation_missing_teams", [])
+    sample_result = st.session_state.get("simulation_sample_result")
+
+    if summary is not None or missing_teams:
         if missing_teams:
             st.error(
                 "Some group teams are missing model-ready features: "
@@ -782,15 +1733,47 @@ with simulator_tab:
                 unsafe_allow_html=True,
             )
             st.caption("Knockout rounds use a seeded 32-team bracket based on simulated group performance.")
+            st.info(champion_explanation(champion["Team"], team_features))
+            st.markdown(
+                f'<div class="badge-row">Top champion badge: {team_badge(champion["Team"])}</div>',
+                unsafe_allow_html=True,
+            )
 
-            chart_data = summary.set_index("Team")["Champion"].head(12)
-            st.bar_chart(chart_data)
+            top_champions = summary[["Team", "Champion"]].head(10)
+            top_finalists = summary[["Team", "Finalist"]].sort_values("Finalist", ascending=False).head(10)
+            top_semifinalists = summary[["Team", "Semifinalist"]].sort_values("Semifinalist", ascending=False).head(10)
 
-            display_summary = summary.copy()
-            for column in display_summary.columns[1:]:
-                display_summary[column] = display_summary[column].map("{:.2%}".format)
+            st.subheader("Most Likely Champions")
+            st.markdown(
+                f'<div class="badge-row">{badge_line(top_champions["Team"].head(5).tolist())}</div>',
+                unsafe_allow_html=True,
+            )
+            st.bar_chart(top_champions.set_index("Team")["Champion"])
 
-            st.dataframe(display_summary, use_container_width=True, hide_index=True)
+            st.subheader("Sample Knockout Bracket")
+            st.caption("One simulated tournament path from this run, shown as a bracket-style snapshot.")
+            render_bracket(sample_result)
+
+            sim_col1, sim_col2 = st.columns(2)
+            with sim_col1:
+                st.subheader("Most Likely Finalists")
+                st.dataframe(format_percent_table(top_finalists), use_container_width=True, hide_index=True)
+            with sim_col2:
+                st.subheader("Most Likely Semifinalists")
+                st.dataframe(format_percent_table(top_semifinalists), use_container_width=True, hide_index=True)
+
+            st.subheader("Full Simulation Table")
+            st.dataframe(format_percent_table(summary), use_container_width=True, hide_index=True)
+            st.download_button(
+                "Download simulation results",
+                data=summary.to_csv(index=False).encode("utf-8"),
+                file_name="2026_world_cup_simulation_results.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+
+with game_tab:
+    render_penalty_game()
 
 with report_tab:
     present_qualified = qualified_prediction_teams(team_features)
@@ -817,14 +1800,14 @@ with report_tab:
 
     st.subheader("Pipeline")
     pipeline_steps = [
-        "Loaded and cleaned players, matches, rankings, squads, and country-name datasets.",
+        "Loaded and cleaned players, matches, rankings, World Cup history, and country-name datasets.",
         "Aligned country names across datasets with explicit aliases.",
         "Created goal difference and home-win target variables.",
         "Built team features from player data: overall, attack, midfield, defense, goalkeeper, age, balance, elite players, and player pool size.",
         "Merged FIFA rankings and points into team-level features.",
         "Converted team data into match-level feature differences.",
         "Filtered to matches from 2005 onward for modern-football training data.",
-        "Compared Logistic Regression, Random Forest, SVM, Naive Bayes, and MLP for match-outcome prediction.",
+        "Compared Logistic Regression, Polynomial Logistic Regression, Random Forest, SVM, Naive Bayes, and MLP for match-outcome prediction.",
         "Compared Linear, Ridge, Lasso, Random Forest, SVR, and MLP regressors for goal-difference prediction.",
         "Built a tournament-success dataset to predict advancement past the group stage.",
         "Generated local model artifacts used by the Streamlit app.",
@@ -834,44 +1817,84 @@ with report_tab:
         st.write(f"- {step}")
 
     st.subheader("Match Outcome Models")
+    st.caption(
+        "This table compares classifiers on the same held-out test split. "
+        "Higher accuracy, precision, recall, F1, and ROC-AUC generally indicate stronger match-outcome performance."
+    )
     classification_df = metrics_table(
         metrics.get("classification_models", {}),
         ["accuracy", "precision", "recall", "f1", "roc_auc"],
     )
     if not classification_df.empty:
+        st.bar_chart(classification_df.set_index("Model")["ACCURACY"].sort_values(ascending=False))
         st.dataframe(
             classification_df.sort_values("ACCURACY", ascending=False),
             use_container_width=True,
             hide_index=True,
         )
+        best_row = classification_df.sort_values("ACCURACY", ascending=False).iloc[0]
+        st.info(
+            f"{best_row['Model']} is the strongest match-outcome model in this run, "
+            f"with {best_row['ACCURACY']:.2%} accuracy."
+        )
+
+    matrix_df = confusion_matrix_table(metrics.get("confusion_matrix", []))
+    if not matrix_df.empty:
+        st.subheader("Best Model Confusion Matrix")
+        st.caption("Rows are actual outcomes and columns are model predictions for the best match-outcome classifier.")
+        st.dataframe(matrix_df, use_container_width=True)
 
     st.subheader("Goal Difference Models")
+    st.caption(
+        "Regression models estimate expected goal difference. Lower MAE and RMSE are better; higher R-squared is better."
+    )
     regression_df = metrics_table(
         metrics.get("regression_models", {}),
         ["mae", "rmse", "r2"],
     )
     if not regression_df.empty:
+        st.bar_chart(regression_df.set_index("Model")["RMSE"].sort_values(ascending=True))
         st.dataframe(
             regression_df.sort_values("RMSE", ascending=True),
             use_container_width=True,
             hide_index=True,
         )
+        best_regression = regression_df.sort_values("RMSE", ascending=True).iloc[0]
+        st.info(
+            f"{best_regression['Model']} has the lowest RMSE in this run, "
+            f"so it is the strongest goal-difference estimator among the tested models."
+        )
 
     st.subheader("Tournament Success Models")
+    st.caption(
+        "These models estimate whether a team advances past the group stage using team-level features."
+    )
     tournament_df = metrics_table(
         metrics.get("tournament_success_models", {}),
         ["accuracy", "roc_auc", "precision", "recall", "f1"],
     )
     if not tournament_df.empty:
+        st.bar_chart(tournament_df.set_index("Model")["ACCURACY"].sort_values(ascending=False))
         st.dataframe(
             tournament_df.sort_values("ACCURACY", ascending=False),
             use_container_width=True,
             hide_index=True,
         )
+        best_tournament = tournament_df.sort_values("ACCURACY", ascending=False).iloc[0]
+        st.info(
+            f"{best_tournament['Model']} has the highest tournament-success accuracy, "
+            "but this task uses fewer World Cup rows, so results should be interpreted cautiously."
+        )
 
     feature_importance = pd.DataFrame(metrics.get("feature_importance", []))
     if not feature_importance.empty:
-        st.subheader("Feature Importance")
+        importance_model = metrics.get("feature_importance_model", "available model")
+        st.subheader(f"Feature Importance ({importance_model})")
+        st.caption(
+            "Feature importance comes from the Random Forest model because the best polynomial model is not as directly interpretable."
+        )
+        chart_data = feature_importance.set_index("feature")["importance"].sort_values(ascending=True)
+        st.bar_chart(chart_data)
         st.dataframe(feature_importance, use_container_width=True, hide_index=True)
 
     data_gaps = metrics.get("data_gaps", [])
@@ -880,5 +1903,30 @@ with report_tab:
         for gap in data_gaps:
             st.write(f"- {gap}")
 
+    st.subheader("Downloads")
+    d1, d2, d3 = st.columns(3)
+    with d1:
+        add_file_download(
+            "Download model dataset",
+            PROCESSED_DATA_DIR / "compiled_fifa_match_dataset.csv",
+            "text/csv",
+        )
+    with d2:
+        add_file_download(
+            "Download capstone report",
+            DOCS_DIR / "CAPSTONE_REPORT.md",
+            "text/markdown",
+        )
+    with d3:
+        add_file_download(
+            "Download presentation deck",
+            DOCS_DIR / "FIFA_World_Cup_Predictor_Capstone.pptx",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        )
+
 st.divider()
-st.caption(f"Model: {metrics.get('best_match_model', 'trained classifier')} | Data: international matches from 2005 onward")
+st.caption(
+    f"Model: {metrics.get('best_match_model', 'trained classifier')} | "
+    "Data: international matches from 2005 onward | "
+    "Known limitation: possession, shots, shots on target, fouls, and the exact 2018 squad roster file were not available locally."
+)
